@@ -1,33 +1,22 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { redFlags, toHomeListing } from "../../shared/broker.ts";
+import { TOOL_LABEL, type ChatEvent, type DisplayMsg, type HomeCardData, type ImageInput } from "../../shared/chat.ts";
 import { analyzePurchase, type Profile } from "../../shared/finance.ts";
-import type { Listing, SearchResult } from "../../shared/listings.ts";
-import { ListingCard } from "../ListingCard.tsx";
 import { useStored } from "../lib.ts";
+import { ListingCard } from "../ListingCard.tsx";
 
-interface Msg {
-  role: "user" | "assistant";
-  content: string;
-  tools?: string[];
-  listings?: Listing[];
-  result?: Pick<SearchResult, "source" | "ccaa" | "notice">;
-  error?: string;
+interface Conversation {
+  id: string;
+  title: string;
+  updatedAt: string;
 }
 
 const SUGGESTIONS = [
+  "Hola, quiero comprar mi primera casa. Hazme las preguntas que necesites.",
   "¿Cuánto puedo permitirme y qué me limita más, los ahorros o el sueldo?",
-  "Busca pisos de 2 habitaciones en Valencia que encajen con mi presupuesto",
-  "¿Qué hipoteca fija me conviene y cuánto pagaría al mes?",
-  "¿Qué cambia si consigo una hipoteca al 90 %?",
+  "Compara las viviendas que tengo guardadas",
+  "¿Qué hipoteca me conviene más, fija o mixta?",
 ];
-
-const TOOL_LABEL: Record<string, string> = {
-  get_profile: "Leyendo tu perfil",
-  max_budget: "Calculando tu presupuesto",
-  analyze_purchase: "Analizando la compra",
-  search_homes: "Buscando viviendas",
-  mortgage_offers: "Comparando hipotecas",
-  web_search: "Buscando en la web",
-};
 
 /** Markdown mínimo (negritas, listas, títulos y enlaces) sin inyectar HTML. */
 function inline(text: string): ReactNode[] {
@@ -62,26 +51,96 @@ function Markdown({ text }: { text: string }) {
   return <>{blocks}</>;
 }
 
-export function Asistente({ profile, aiReady, onSimulate }: { profile: Profile; aiReady: boolean | null; onSimulate: (price: number) => void }) {
-  const [messages, setMessages] = useStored<Msg[]>("hs.chat", []);
+/** Reduce una captura a 1600 px de lado y la pasa a JPEG: menos tokens y peticiones más ligeras. */
+function toImageInput(file: File): Promise<ImageInput> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(img.src);
+      resolve({ mediaType: "image/jpeg", data: canvas.toDataURL("image/jpeg", 0.85).split(",")[1] });
+    };
+    img.onerror = () => reject(new Error("No he podido leer la imagen."));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+interface Props {
+  profile: Profile;
+  aiReady: boolean | null;
+  onSimulate: (price: number) => void;
+  onProfile: (p: Profile) => void;
+}
+
+export function Asistente({ profile, aiReady, onSimulate, onProfile }: Props) {
+  const [conversationId, setConversationId] = useStored<string | null>("hs.conversation", null);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [messages, setMessages] = useState<DisplayMsg[]>([]);
   const [input, setInput] = useState("");
+  const [images, setImages] = useState<{ preview: string; image: ImageInput }[]>([]);
   const [busy, setBusy] = useState(false);
   const abort = useRef<AbortController | null>(null);
   const end = useRef<HTMLDivElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  const loadConversations = () =>
+    fetch("/api/conversations")
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setConversations)
+      .catch(() => {});
+
+  useEffect(() => {
+    loadConversations();
+  }, []);
+
+  // carga la conversación guardada (si se está escribiendo en ella, no se pisa)
+  useEffect(() => {
+    if (busy) return;
+    if (!conversationId) return setMessages([]);
+    fetch(`/api/conversations/${conversationId}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((d: { messages: DisplayMsg[] }) => setMessages(d.messages))
+      .catch(() => {
+        setConversationId(null);
+        setMessages([]);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
 
   useEffect(() => {
     end.current?.scrollIntoView({ block: "nearest" });
   }, [messages]);
   useEffect(() => () => abort.current?.abort(), []);
 
+  async function addFiles(files: Iterable<File>) {
+    for (const f of files) {
+      if (!f.type.startsWith("image/")) continue;
+      try {
+        const image = await toImageInput(f);
+        setImages((list) => [...list, { preview: `data:image/jpeg;base64,${image.data}`, image }].slice(0, 5));
+      } catch {
+        // imagen ilegible: se ignora
+      }
+    }
+  }
+
   async function send(text: string) {
-    const question = text.trim();
+    const question = text.trim() || (images.length ? "Te paso un anuncio, ¿qué te parece?" : "");
     if (!question || busy) return;
-    const history = [...messages, { role: "user" as const, content: question }];
-    setMessages([...history, { role: "assistant", content: "" }]);
+    const attached = images.map((i) => i.image);
+    setMessages((all) => [
+      ...all,
+      { role: "user", text: question, images: attached.length, tools: [], homes: [] },
+      { role: "assistant", text: "", images: 0, tools: [], homes: [] },
+    ]);
     setInput("");
+    setImages([]);
     setBusy(true);
-    const patch = (fn: (m: Msg) => Msg) => setMessages((all) => all.map((m, i) => (i === all.length - 1 ? fn(m) : m)));
+    const patch = (fn: (m: DisplayMsg) => DisplayMsg) => setMessages((all) => all.map((m, i) => (i === all.length - 1 ? fn(m) : m)));
     abort.current = new AbortController();
 
     try {
@@ -89,10 +148,7 @@ export function Asistente({ profile, aiReady, onSimulate }: { profile: Profile; 
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: abort.current.signal,
-        body: JSON.stringify({
-          profile,
-          messages: history.filter((m) => m.content.trim()).map(({ role, content }) => ({ role, content })),
-        }),
+        body: JSON.stringify({ conversationId: conversationId ?? undefined, text: question, images: attached.length ? attached : undefined }),
       });
       if (!res.ok || !res.body) throw new Error((await res.json().catch(() => null))?.error ?? `Error ${res.status}`);
 
@@ -106,39 +162,87 @@ export function Asistente({ profile, aiReady, onSimulate }: { profile: Profile; 
         buffer = events.pop() ?? "";
         for (const chunk of events) {
           if (!chunk.startsWith("data: ")) continue;
-          const e = JSON.parse(chunk.slice(6));
-          if (e.type === "text") patch((m) => ({ ...m, content: m.content + e.text }));
-          else if (e.type === "tool") patch((m) => ({ ...m, tools: [...(m.tools ?? []), e.name] }));
-          else if (e.type === "listings") patch((m) => ({ ...m, listings: e.listings, result: e.result }));
+          const e = JSON.parse(chunk.slice(6)) as ChatEvent;
+          if (e.type === "conversation") setConversationId(e.id);
+          else if (e.type === "text") patch((m) => ({ ...m, text: m.text + e.text }));
+          else if (e.type === "tool") patch((m) => ({ ...m, tools: [...m.tools, e.name] }));
+          else if (e.type === "home") patch((m) => ({ ...m, homes: [...m.homes, { listing: e.listing, savedId: e.savedId }] }));
+          else if (e.type === "profile") onProfile(e.profile);
           else if (e.type === "error") patch((m) => ({ ...m, error: e.message }));
         }
       }
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
-        const message = err instanceof TypeError ? "No hay conexión con el servidor local. ¿Está arrancado con npm run dev?" : (err as Error).message;
+        const message = err instanceof TypeError ? "No hay conexión con el servidor local. ¿Está arrancado?" : (err as Error).message;
         patch((m) => ({ ...m, error: message }));
       }
     } finally {
       setBusy(false);
+      loadConversations();
     }
+  }
+
+  function homeCard(card: HomeCardData, key: number) {
+    const l = toHomeListing(card.listing, card.savedId ?? String(key));
+    const p = { ...profile, ccaa: l.ccaa ?? profile.ccaa, newBuild: l.newDevelopment || profile.newBuild };
+    return (
+      <ListingCard
+        key={key}
+        listing={l}
+        analysis={analyzePurchase(p, l.price)}
+        flags={redFlags(l)}
+        status={card.savedId ? "guardada" : undefined}
+        onSimulate={() => onSimulate(l.price)}
+      />
+    );
   }
 
   return (
     <div className="stack">
       {aiReady === false && (
         <p className="note warn">
-          El asistente necesita una clave de la API de Claude. Copia <code>.env.example</code> a <code>.env</code>, pon tu <code>ANTHROPIC_API_KEY</code> y
-          reinicia <code>npm run dev</code>. El resto de la aplicación funciona sin ella.
+          Tu bróker necesita una clave de la API de Claude. Copia <code>.env.example</code> a <code>.env</code>, pon tu <code>ANTHROPIC_API_KEY</code> y reinicia.
+          El resto de la aplicación funciona sin ella.
         </p>
       )}
-      <section className="panel chat">
+      <div className="chat-bar">
+        <select
+          value={conversationId ?? ""}
+          onChange={(e) => setConversationId(e.target.value || null)}
+          disabled={busy}
+          aria-label="Conversación"
+        >
+          <option value="">Nueva conversación</option>
+          {conversations.map((c) => (
+            <option key={c.id} value={c.id}>
+              {new Date(c.updatedAt).toLocaleDateString("es-ES", { day: "numeric", month: "short" })} · {c.title}
+            </option>
+          ))}
+        </select>
+        {conversationId && (
+          <button className="ghost" onClick={() => setConversationId(null)} disabled={busy}>
+            + Nueva
+          </button>
+        )}
+      </div>
+      <section
+        className="panel chat"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault();
+          addFiles(e.dataTransfer.files);
+        }}
+      >
         {messages.length === 0 && (
           <div className="chat-empty">
-            <h2>Pregúntale a tu asistente</h2>
-            <p className="muted">Conoce tu perfil, hace los números con el mismo motor que el simulador y busca viviendas por ti.</p>
+            <h2>Habla con tu bróker</h2>
+            <p className="muted">
+              Cuéntale tu situación y te dirá cuánto puedes comprar. Pégale anuncios de Idealista (texto o captura) y te dirá si te encajan, qué
+              alertas tienen y te los guarda. Se acuerda de todo entre conversaciones.
+            </p>
             <div className="suggestions">
               {SUGGESTIONS.map((s) => (
-                <button key={s} className="ghost" onClick={() => send(s)} disabled={busy}>
+                <button key={s} className="ghost" onClick={() => send(s)} disabled={busy || aiReady === false}>
                   {s}
                 </button>
               ))}
@@ -147,33 +251,27 @@ export function Asistente({ profile, aiReady, onSimulate }: { profile: Profile; 
         )}
         {messages.map((m, i) => {
           const last = i === messages.length - 1;
-          const p = m.result?.ccaa ? { ...profile, ccaa: m.result.ccaa } : profile;
           return (
             <div key={i} className={`msg ${m.role}`}>
-              {m.tools && m.tools.length > 0 && (
-                <p className="tools">{[...new Set(m.tools)].map((t) => TOOL_LABEL[t] ?? t).join(" · ")}</p>
-              )}
-              {m.content ? <Markdown text={m.content} /> : last && busy && !m.error ? <p className="muted">Pensando…</p> : null}
+              {m.tools.length > 0 && <p className="tools">{[...new Set(m.tools)].map((t) => TOOL_LABEL[t] ?? t).join(" · ")}</p>}
+              {m.text ? <Markdown text={m.text} /> : last && busy && !m.error ? <p className="muted">Pensando…</p> : null}
+              {m.images > 0 && <p className="small">📎 {m.images === 1 ? "1 imagen" : `${m.images} imágenes`}</p>}
               {m.error && <p className="note bad">{m.error}</p>}
-              {m.listings && m.listings.length > 0 && (
-                <>
-                  {m.result?.source === "ejemplo" && <p className="note warn">Viviendas de ejemplo (inventadas): no son anuncios reales.</p>}
-                  <div className="cards">
-                    {m.listings.slice(0, 6).map((l) => (
-                      <ListingCard
-                        key={l.id}
-                        listing={l}
-                        analysis={analyzePurchase({ ...p, newBuild: l.newDevelopment || p.newBuild }, l.price)}
-                        onSimulate={() => onSimulate(l.price)}
-                      />
-                    ))}
-                  </div>
-                </>
-              )}
+              {m.homes.length > 0 && <div className="cards">{m.homes.map(homeCard)}</div>}
             </div>
           );
         })}
         <div ref={end} />
+        {images.length > 0 && (
+          <div className="attachments">
+            {images.map((img, i) => (
+              <button key={i} className="attachment" title="Quitar" onClick={() => setImages((list) => list.filter((_, j) => j !== i))}>
+                <img src={img.preview} alt={`Adjunto ${i + 1}`} />
+                <span aria-hidden>×</span>
+              </button>
+            ))}
+          </div>
+        )}
         <form
           className="chat-input"
           onSubmit={(e) => {
@@ -181,9 +279,30 @@ export function Asistente({ profile, aiReady, onSimulate }: { profile: Profile; 
             send(input);
           }}
         >
+          <button type="button" className="ghost" title="Adjuntar captura" onClick={() => fileInput.current?.click()} disabled={busy}>
+            📎
+          </button>
+          <input
+            ref={fileInput}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            onChange={(e) => {
+              if (e.target.files) addFiles(e.target.files);
+              e.target.value = "";
+            }}
+          />
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onPaste={(e) => {
+              const files = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/"));
+              if (files.length) {
+                e.preventDefault();
+                addFiles(files);
+              }
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -191,23 +310,18 @@ export function Asistente({ profile, aiReady, onSimulate }: { profile: Profile; 
               }
             }}
             rows={2}
-            placeholder="Busca pisos en Getafe de menos de 200.000 € y dime cuál me conviene…"
+            placeholder="Escribe, pega el texto de un anuncio o una captura (Ctrl+V)…"
           />
           {busy ? (
             <button type="button" className="ghost" onClick={() => abort.current?.abort()}>
               Parar
             </button>
           ) : (
-            <button type="submit" disabled={!input.trim()}>
+            <button type="submit" disabled={!input.trim() && images.length === 0}>
               Enviar
             </button>
           )}
         </form>
-        {messages.length > 0 && !busy && (
-          <button className="link" onClick={() => setMessages([])}>
-            Borrar conversación
-          </button>
-        )}
       </section>
     </div>
   );

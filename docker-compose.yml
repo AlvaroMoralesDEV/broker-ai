@@ -1,0 +1,44 @@
+# docker compose up --build   →   http://localhost:8787
+#
+# Lee ANTHROPIC_API_KEY (y opcionalmente ANTHROPIC_MODEL, POSTGRES_PASSWORD) del archivo .env.
+# Los puertos solo escuchan en 127.0.0.1: nada queda expuesto fuera de tu ordenador.
+name: broker-ia
+
+services:
+  db:
+    # Postgres 16 con pgvector, para el RAG de la siguiente fase
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: broker
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-broker}
+      POSTGRES_DB: broker
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # para `npm run dev` o el servidor MCP fuera de Docker: DATABASE_URL=postgres://broker:broker@localhost:5433/broker
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U broker -d broker"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgres://broker:${POSTGRES_PASSWORD:-broker}@db:5432/broker
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5-5}
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      # los tipos de los bancos se actualizan editando el archivo, sin reconstruir la imagen
+      - ./data/rates.json:/app/data/rates.json:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:

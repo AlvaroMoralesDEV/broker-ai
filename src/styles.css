@@ -223,3 +223,22 @@ button.link { background: none; border: 0; color: var(--accent); padding: 0; fon
 .milestone { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; }
 .milestone.reached { border-color: var(--good); background: var(--good-soft); }
 .milestone b { font-size: 1.1rem; font-variant-numeric: tabular-nums; }
+
+/* --- bróker: chat, adjuntos, alertas y notas --- */
+.chat-bar { display: flex; gap: 8px; align-items: center; }
+.chat-bar select { flex: 1; min-width: 0; }
+.attachments { display: flex; gap: 8px; flex-wrap: wrap; }
+.attachment { position: relative; padding: 0; width: 72px; height: 72px; border-radius: 10px; overflow: hidden; background: var(--bg); border-color: var(--line); }
+.attachment img { width: 100%; height: 100%; object-fit: cover; }
+.attachment span { position: absolute; top: 2px; right: 4px; color: var(--panel); text-shadow: 0 0 3px #000; font-size: 1rem; }
+.flags { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.flags li { font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; cursor: help; }
+.flags .flag-alto { background: var(--bad-soft); color: var(--bad); }
+.flags .flag-medio { background: var(--warn-soft); color: var(--ink); }
+.notes { width: 100%; resize: vertical; font-size: 0.85rem; }
+.card-actions select { width: auto; }
+@media (max-width: 640px) {
+  .msg.user { max-width: 92%; }
+  .chat-input { flex-wrap: wrap; }
+  .chat-input textarea { flex-basis: 100%; order: -1; }
+}

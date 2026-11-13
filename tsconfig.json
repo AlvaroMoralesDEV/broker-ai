@@ -12,6 +12,7 @@
     "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "isolatedModules": true,
+    "erasableSyntaxOnly": true,
     "types": ["node", "vite/client"]
   },
   "include": ["src", "server", "shared"]

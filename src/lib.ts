@@ -40,23 +40,54 @@ export function useStored<T>(key: string, initial: T | (() => T)) {
   return [value, setValue] as const;
 }
 
-/** Perfil del usuario: se guarda en el navegador y se copia al servidor (para el servidor MCP). */
+/**
+ * Perfil del usuario. La fuente de verdad es el servidor (lo actualizan el formulario, el agente y el
+ * servidor MCP). El formulario envía solo los campos que cambian, agrupados cada 800 ms.
+ */
 export function useProfile() {
-  const [profile, setProfile] = useStored<Profile>("hs.profile", DEFAULT_PROFILE);
+  const [profile, setProfile] = useState<Profile>(DEFAULT_PROFILE);
+  const [known, setKnown] = useState<boolean | null>(null);
+  const pending = useRef<Partial<Profile>>({});
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const reload = () =>
+    fetch("/api/profile")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { profile: Profile; known: boolean } | null) => {
+        if (!d) return;
+        setProfile(d.profile);
+        setKnown(d.known);
+      })
+      .catch(() => {});
+
   useEffect(() => {
+    reload();
+  }, []);
+
+  const update = (patch: Partial<Profile>) => {
+    setProfile((p) => ({ ...p, ...patch }));
+    pending.current = { ...pending.current, ...patch };
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
-      fetch("/api/profile", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(profile) }).catch(() => {});
+      const body = JSON.stringify({ profile: pending.current });
+      pending.current = {};
+      fetch("/api/profile", { method: "PATCH", headers: { "Content-Type": "application/json" }, body })
+        .then((r) => r.ok && setKnown(true))
+        .catch(() => {});
     }, 800);
-  }, [profile]);
-  const update = (patch: Partial<Profile>) => setProfile((p) => ({ ...p, ...patch }));
-  return [profile, update] as const;
+  };
+  /** el agente ha cambiado el perfil: se pinta sin volver a enviarlo */
+  const replace = (p: Profile) => {
+    setProfile(p);
+    setKnown(true);
+  };
+  return { profile, known, update, replace, reload };
 }
 
 export interface Status {
-  idealista: boolean;
   ai: boolean;
+  db: "postgres" | "pglite";
+  model: string;
 }
 
 export function useStatus(): Status | null {

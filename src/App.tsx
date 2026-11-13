@@ -4,7 +4,7 @@ import { CCAA_LIST, type CCAA } from "../shared/taxes.ts";
 import { RATES, dateEs, eur, useProfile, useStatus, useStored } from "./lib.ts";
 import { Field, Num, Stat } from "./ui.tsx";
 import { Simulador } from "./tabs/Simulador.tsx";
-import { Casas } from "./tabs/Casas.tsx";
+import { MisViviendas } from "./tabs/Casas.tsx";
 import { Hipotecas } from "./tabs/Hipotecas.tsx";
 import { Bonificaciones } from "./tabs/Bonificaciones.tsx";
 import { AlquilarComprar } from "./tabs/AlquilarComprar.tsx";
@@ -13,21 +13,21 @@ import { PlanAhorro } from "./tabs/PlanAhorro.tsx";
 import { Amortizar } from "./tabs/Amortizar.tsx";
 
 const TABS = [
+  ["asistente", "Tu bróker"],
+  ["casas", "Mis viviendas"],
   ["simulador", "Simulador"],
-  ["casas", "Buscar casas"],
   ["hipotecas", "Hipotecas"],
   ["plan", "Plan de ahorro"],
   ["amortizar", "Amortizar antes"],
   ["bonificaciones", "Bonificaciones"],
   ["alquiler", "Alquilar o comprar"],
-  ["asistente", "Asistente IA"],
 ] as const;
 type Tab = (typeof TABS)[number][0];
 
 export function App() {
-  const [profile, update] = useProfile();
+  const { profile, known, update, replace } = useProfile();
   const status = useStatus();
-  const [tab, setTab] = useStored<Tab>("hs.tab", "simulador");
+  const [tab, setTab] = useStored<Tab>("hs.tab", "asistente");
   useEffect(() => {
     // enlaces directos a una pestaña: http://localhost:5173/#hipotecas
     const fromHash = TABS.find(([id]) => id === location.hash.slice(1))?.[0];
@@ -50,21 +50,24 @@ export function App() {
         <div className="brand">
           <span className="logo" aria-hidden>⌂</span>
           <div>
-            <h1>Hipoteca Searcher</h1>
-            <p>Tu hipoteca y tu casa, en un solo sitio</p>
+            <h1>Bróker IA</h1>
+            <p>Tu bróker hipotecario personal</p>
           </div>
         </div>
         <div className="status">
           <span className="pill">Tipos actualizados el {dateEs(RATES.updated)}</span>
           <span className="pill">Euríbor {RATES.euribor.monthlyAvg.toLocaleString("es-ES")} %</span>
-          {status && <span className={`pill ${status.idealista ? "on" : "off"}`}>Idealista: {status.idealista ? "API real" : "datos de ejemplo"}</span>}
-          {status && <span className={`pill ${status.ai ? "on" : "off"}`}>IA: {status.ai ? "activa" : "sin clave"}</span>}
+          {status && <span className="pill on">Datos: {status.db === "postgres" ? "Postgres" : "base local"}</span>}
+          {status && <span className={`pill ${status.ai ? "on" : "off"}`}>IA: {status.ai ? status.model : "sin clave"}</span>}
         </div>
       </header>
 
       <div className="layout">
         <aside className="panel profile">
           <h2>Tu perfil</h2>
+          {known === false && (
+            <p className="note warn">Aún no has dado tus datos: cuéntaselos a tu bróker o rellénalos aquí. Mientras, los números usan un perfil de ejemplo.</p>
+          )}
           <ProfileForm profile={profile} update={update} maxYears={maxYears} />
         </aside>
 
@@ -90,13 +93,13 @@ export function App() {
           </nav>
 
           {tab === "simulador" && <Simulador profile={profile} update={update} price={price} setPrice={setPrice} budget={budget} />}
-          {tab === "casas" && <Casas profile={profile} budget={budget} onSimulate={simulate} />}
+          {tab === "casas" && <MisViviendas profile={profile} onSimulate={simulate} />}
           {tab === "hipotecas" && <Hipotecas profile={profile} update={update} price={price} />}
           {tab === "plan" && <PlanAhorro profile={profile} price={price} setPrice={setPrice} />}
           {tab === "amortizar" && <Amortizar profile={profile} price={price} />}
           {tab === "bonificaciones" && <Bonificaciones profile={profile} price={price} />}
           {tab === "alquiler" && <AlquilarComprar profile={profile} price={price} />}
-          {tab === "asistente" && <Asistente profile={profile} aiReady={status?.ai ?? null} onSimulate={simulate} />}
+          {tab === "asistente" && <Asistente profile={profile} aiReady={status?.ai ?? null} onSimulate={simulate} onProfile={replace} />}
 
           <footer className="foot">
             Cálculos orientativos: no son una oferta ni asesoramiento financiero. Los impuestos y tipos reducidos dependen de requisitos que debes

@@ -1,6 +1,36 @@
 # Next session plan: from mortgage calculator to AI broker agent
 
-Written 2026-11-13. Read this first, then start at **Phase 0**.
+Written 2026-11-13. Read the **Status** section first; the rest is the original plan.
+
+## Status (end of session 2, 2026-11-13)
+
+**Done:** Phase 0, Phase 1 and most of Phase 2, built as one vertical slice: paste a listing → verdict with reasons → saved → still there after a restart → recalculated when the situation changes.
+
+- git repo (`main`), package renamed `broker-ia`. **The folder still needs renaming by hand** (see below).
+- `docker compose up -d --build` → app + Postgres 16/pgvector, ports bound to 127.0.0.1. `npm run dev` without Docker uses PGlite (embedded Postgres, same migrations).
+- DB: `profile` + append-only `profile_facts`, `conversations` + `messages` (stored exactly as sent to the API, never edited), `homes` + `home_prices`.
+- New tools: `update_profile` (netPay × pagas computed in code, returns budget before/after and verdict changes for saved homes), `evaluate_listing`, `save_home` (idempotent by Idealista URL id, records price changes), `list_saved_homes`, `update_home`, `remove_home`. Idealista search code removed.
+- Red flags: deterministic rules in `shared/broker.ts` with evidence snippets and negation handling.
+- Agent: interview-first system prompt, conversation memory from DB, screenshot paste (downscaled in the browser), model `claude-opus-5-5` (override with `ANTHROPIC_MODEL`), effort `medium`, server-side refusal fallback on.
+- UI: "Tu bróker" is the default tab; it has conversation history, pasted images, listing cards with flags and live profile updates. "Mis viviendas" shows saved homes from the DB with status, notes, price history and a comparison table.
+- Tests: 26 passing (`npm test`), using an in-memory DB, no model calls. Verified by hand: Docker health, profile PATCH, restart persistence, and a real MCP stdio client saving a home that the web API then returns.
+
+**Not verified:** the live model loop. There was no `ANTHROPIC_API_KEY` in this session, so no real conversation has run yet, and the new UI was built and typechecked but not looked at in a browser. First thing next session: add the key, run the demo below, and fix what breaks.
+
+**Demo script (3 minutes):**
+1. New conversation → "Hola, quiero comprar mi primera casa". It should interview, one question at a time.
+2. Answer savings and pay ("cobro 1.900 netos en 14 pagas, tengo 42.000 ahorrados"). The profile panel updates and you get a first budget.
+3. Paste a real Idealista listing (text or screenshot). You should get a verdict, the real cost, flags and questions for the seller.
+4. "Guárdala" → it appears in Mis viviendas. `docker compose restart app` → still there.
+5. "Me han subido el sueldo a 2.100" → the budget is recalculated and saved homes change verdict.
+
+**Week two (cut on purpose this session):**
+- Rolling conversation summaries / compaction (history is replayed in full; fine until conversations get long).
+- Price per m² by zone from a real source (decision 5 below is still open).
+- Phase 3 chat-first layout (side panel with snapshot + saved homes); Phase 4 RAG; Phase 5 MCP over HTTP + skills; Phase 6 evals.
+- Eval set: 15-20 scripted conversations asserting the right tool calls and that numbers match `shared/finance.ts`.
+
+**Still needed from you:** an API key in `.env`, the folder rename, and answers to decisions 2, 3, 5 and 6 (defaults were used: Claude API, custom React UI, single user, Spanish UI).
 
 ## Goal
 
