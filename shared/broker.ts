@@ -28,16 +28,38 @@ export interface ProfileExtra {
 }
 
 /** Datos mínimos que conviene tener antes de dar un presupuesto fiable, con cómo preguntarlos. */
-export const KEY_FACTS: { key: string; ask: string }[] = [
-  { key: "savings", ask: "ahorros disponibles para la compra" },
-  { key: "netIncome", ask: "sueldo neto por paga y número de pagas (12 o 14)" },
-  { key: "contractType", ask: "tipo de contrato y antigüedad" },
-  { key: "monthlyDebts", ask: "otras deudas mensuales (coche, préstamos, tarjetas)" },
-  { key: "coBuyer", ask: "si compra solo o con otra persona, y sus ingresos" },
-  { key: "ccaa", ask: "comunidad autónoma donde quiere comprar" },
-  { key: "targetZones", ask: "zonas que le interesan" },
-  { key: "timeline", ask: "cuándo quiere comprar" },
+export const KEY_FACTS: { key: string; label: string; ask: string; question: string }[] = [
+  { key: "savings", label: "Ahorros", ask: "ahorros disponibles para la compra", question: "¿Cuánto tienes ahorrado para la compra?" },
+  {
+    key: "netIncome",
+    label: "Sueldo",
+    ask: "sueldo neto por paga y número de pagas (12 o 14)",
+    question: "¿Cuánto cobras neto en cada nómina y cuántas pagas tienes (12 o 14)?",
+  },
+  {
+    key: "contractType",
+    label: "Contrato",
+    ask: "tipo de contrato y antigüedad",
+    question: "¿Qué tipo de contrato tienes: indefinido, temporal, autónomo o funcionario?",
+  },
+  {
+    key: "monthlyDebts",
+    label: "Deudas",
+    ask: "otras deudas mensuales (coche, préstamos, tarjetas)",
+    question: "¿Pagas alguna deuda cada mes (coche, préstamos, tarjetas)? Si no tienes, dime «no tengo deudas».",
+  },
+  { key: "coBuyer", label: "Solo o en pareja", ask: "si compra solo o con otra persona, y sus ingresos", question: "¿Compras solo o con otra persona?" },
+  { key: "ccaa", label: "Dónde", ask: "comunidad autónoma donde quiere comprar", question: "¿En qué ciudad o comunidad quieres comprar?" },
+  { key: "targetZones", label: "Zonas", ask: "zonas que le interesan", question: "¿Qué barrios o zonas te interesan?" },
+  { key: "timeline", label: "Plazo", ask: "cuándo quiere comprar", question: "¿Para cuándo te gustaría comprar?" },
 ];
+
+/** Datos clave que faltan, dados los campos que el usuario ha dado alguna vez. */
+export function missingKeyFacts(given: Iterable<string>) {
+  const g = new Set(given);
+  if (g.has("netPay")) g.add("netIncome");
+  return KEY_FACTS.filter((f) => !g.has(f.key));
+}
 
 /** Anuncio de una vivienda: los campos de Listing más lo que suele venir en el texto del anuncio. */
 export interface HomeListing extends Listing {

@@ -1,13 +1,14 @@
 // El agente bróker: Claude con herramientas propias, memoria en base de datos y entrevista inicial.
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
-import { KEY_FACTS } from "../shared/broker.ts";
+import { missingKeyFacts } from "../shared/broker.ts";
 import type { ChatEvent, DisplayMsg, ImageInput } from "../shared/chat.ts";
 import { ccaaName } from "../shared/taxes.ts";
+import { runLocal } from "./local.ts";
+import { CLAUDE_MODEL as MODEL, resolveProvider } from "./provider.ts";
 import * as store from "./store.ts";
 import { TOOLS, loadRates, makeContext, runTool, type ToolName } from "./tools.ts";
 
-export const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-5-5";
 const MAX_STEPS = 16;
 
 type Block = Anthropic.Beta.BetaContentBlockParam;
@@ -53,9 +54,7 @@ Responde en el idioma del usuario, directo y con cifras concretas en euros. Mark
 
 async function contextBlock(): Promise<string> {
   const { profile: p, extra, known } = await store.getProfile();
-  const given = await store.givenFields();
-  if (given.has("netPay")) given.add("netIncome");
-  const missing = KEY_FACTS.filter((f) => !given.has(f.key)).map((f) => f.ask);
+  const missing = missingKeyFacts(await store.givenFields()).map((f) => f.ask);
   const homes = await store.listHomes();
   const rates = loadRates();
   const today = new Date().toISOString().slice(0, 10);
@@ -90,17 +89,21 @@ export interface UserTurn {
   images?: ImageInput[];
 }
 
+/** Un turno del agente con el mejor cerebro disponible: Claude, modelo local o solo el enrutador. */
 export async function runAgent(conversationId: string, turn: UserTurn, emit: (e: ChatEvent) => void, signal: AbortSignal): Promise<void> {
+  const provider = await resolveProvider();
+  const repair = danglingToolResults(await store.getMessages(conversationId));
+  if (repair) await store.appendMessage(conversationId, repair);
+  if (provider.kind === "anthropic") return runClaude(conversationId, turn, emit, signal);
+  return runLocal(provider, conversationId, turn, emit, signal);
+}
+
+async function runClaude(conversationId: string, turn: UserTurn, emit: (e: ChatEvent) => void, signal: AbortSignal): Promise<void> {
   const client = new Anthropic();
   const ctx = await makeContext("chat", conversationId, (e) => emit(e));
   const tools = toolDefinitions();
 
   const messages = await store.getMessages(conversationId);
-  const repair = danglingToolResults(messages);
-  if (repair) {
-    await store.appendMessage(conversationId, repair);
-    messages.push(repair);
-  }
   const userMsg: Msg = {
     role: "user",
     content: [

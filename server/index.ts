@@ -6,7 +6,10 @@ import { z } from "zod";
 import { CONTRACT_TYPES, HOME_STATUSES } from "../shared/broker.ts";
 import type { ChatEvent } from "../shared/chat.ts";
 import { CCAA_IDS } from "../shared/taxes.ts";
-import { MODEL, describeError, runAgent, toDisplay } from "./agent.ts";
+import { describeError, runAgent, toDisplay } from "./agent.ts";
+import { resolveProvider } from "./provider.ts";
+import { missingKeyFacts, toHomeListing } from "../shared/broker.ts";
+import { analyzePurchase } from "../shared/finance.ts";
 import { getDb } from "./db.ts";
 import * as store from "./store.ts";
 import { loadRates } from "./tools.ts";
@@ -15,7 +18,6 @@ const app = express();
 // las capturas de anuncios viajan en base64
 app.use(express.json({ limit: "25mb" }));
 
-const aiConfigured = () => Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
 
 const asyncRoute =
   (fn: (req: express.Request, res: express.Response) => Promise<unknown>) => (req: express.Request, res: express.Response) =>
@@ -31,7 +33,7 @@ app.get("/api/health", asyncRoute(async (_req, res) => {
 }));
 
 app.get("/api/status", asyncRoute(async (_req, res) => {
-  res.json({ ai: aiConfigured(), db: (await getDb()).kind, model: MODEL });
+  res.json({ db: (await getDb()).kind, provider: await resolveProvider() });
 }));
 
 app.get("/api/rates", (_req, res) => {
@@ -41,7 +43,12 @@ app.get("/api/rates", (_req, res) => {
 // ------------------------------------------------------------ perfil
 
 app.get("/api/profile", asyncRoute(async (_req, res) => {
-  res.json({ ...(await store.getProfile()), history: await store.profileHistory(50) });
+  const given = await store.givenFields();
+  res.json({
+    ...(await store.getProfile()),
+    history: await store.profileHistory(50),
+    facts: { known: [...given], missing: missingKeyFacts(given).map((f) => f.key) },
+  });
 }));
 
 const profilePatch = z
@@ -97,6 +104,16 @@ app.get("/api/homes", asyncRoute(async (req, res) => {
   res.json(await store.listHomes({ includeDiscarded: req.query.all === "1" }));
 }));
 
+// Guardar desde la tarjeta del chat, sin pasar por el modelo.
+app.post("/api/homes", asyncRoute(async (req, res) => {
+  const parsed = z.object({ listing: z.object({ title: z.string().min(1), price: z.number().min(1000) }).passthrough() }).safeParse(req.body);
+  if (!parsed.success) return void res.status(400).json({ error: "Vivienda no válida" });
+  const listing = toHomeListing(parsed.data.listing as never);
+  const { profile } = await store.getProfile();
+  const verdict = analyzePurchase({ ...profile, ccaa: listing.ccaa ?? profile.ccaa, newBuild: listing.newDevelopment || profile.newBuild }, listing.price).verdict;
+  res.json((await store.saveHome(listing, { verdict })).home);
+}));
+
 app.patch("/api/homes/:id", asyncRoute(async (req, res) => {
   const parsed = z
     .object({ status: z.enum(HOME_STATUSES).optional(), notes: z.string().max(2000).optional(), price: z.number().min(1000).optional() })
@@ -140,9 +157,6 @@ const chatSchema = z.object({
 app.post("/api/chat", asyncRoute(async (req, res) => {
   const parsed = chatSchema.safeParse(req.body);
   if (!parsed.success) return void res.status(400).json({ error: "Petición no válida (máximo 5 imágenes de 5 MB)." });
-  if (!aiConfigured()) {
-    return void res.status(503).json({ error: "Falta ANTHROPIC_API_KEY. Añádela al archivo .env y reinicia el servidor." });
-  }
   let { conversationId } = parsed.data;
   if (conversationId && !(await store.conversationExists(conversationId))) conversationId = undefined;
   const title = parsed.data.text.split("\n")[0].slice(0, 60);
@@ -175,5 +189,5 @@ if (await store.importLegacyProfile(new URL("../data/profile.json", import.meta.
 const port = Number(process.env.PORT) || 8787;
 const host = process.env.HOST || "127.0.0.1";
 app.listen(port, host, () => {
-  console.log(`API en http://localhost:${port}  ·  base de datos: ${db.kind}  ·  IA: ${aiConfigured() ? MODEL : "sin clave"}`);
+  resolveProvider().then((p) => console.log(`API en http://localhost:${port}  ·  base de datos: ${db.kind}  ·  IA: ${p.label}${p.kind === "anthropic" ? ` (${p.model})` : ""}`));
 });
