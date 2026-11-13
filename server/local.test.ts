@@ -69,6 +69,13 @@ test("el sueldo en bruto no se guarda: se pregunta", async () => {
   assert.equal((await store.getProfile()).extra.netPay, 1900);
 });
 
+test("un dato que coincide con el valor por defecto también cuenta como dado", async () => {
+  const r = await say("No tengo deudas");
+  assert.match(r.text, /sin deudas/);
+  assert.match(r.text, /¿Compras solo/, "no vuelve a preguntar por las deudas");
+  assert.ok((await store.givenFields()).has("monthlyDebts"));
+});
+
 test("anuncio pegado: veredicto, costes, alertas, preguntas y tarjeta", async () => {
   const r = await say(ANUNCIO);
   assert.deepEqual(r.tools, ["evaluate_listing"]);
@@ -119,4 +126,24 @@ test("el historial queda en el mismo formato que con Claude", async () => {
   const withCard = display.find((m) => m.homes.length > 0);
   assert.equal(withCard?.homes[0].listing.price, 189000);
   assert.ok(display.every((m) => m.role === "user" || m.text.length > 0));
+});
+
+test("si compra acompañado, pregunta el sueldo de la otra persona y lo suma", async () => {
+  const before = (await store.getProfile()).profile.netIncome;
+  const r = await say("Al final compro con mi pareja");
+  assert.match(r.text, /¿Cuánto cobra neto la otra persona/);
+  const r2 = await say("1500 en 12");
+  const me = await store.getProfile();
+  assert.equal(me.extra.coBuyerNetPay, 1500);
+  assert.equal(me.profile.netIncome, before + 1500);
+  assert.match(r2.text, /sumando los dos sueldos/);
+});
+
+test("las preguntas de explicación no se confunden con pedir ofertas o presupuesto", async () => {
+  for (const q of ["¿Qué es el euríbor y cómo afecta a una hipoteca variable?", "¿Qué diferencia hay entre hipoteca fija y mixta?", "¿Cómo se calcula el presupuesto máximo?"]) {
+    const r = await say(q);
+    assert.deepEqual(r.tools, [], q);
+    assert.match(r.text, /no hay ningún modelo de IA/, q);
+  }
+  assert.deepEqual((await say("¿Qué banco me ofrece la mejor hipoteca?")).tools, ["mortgage_offers"]);
 });

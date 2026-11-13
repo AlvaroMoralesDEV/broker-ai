@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ratesJson from "../data/rates.json";
+import type { HomeStatus, ListingInput, ProfileExtra, SavedHome } from "../shared/broker.ts";
 import { DEFAULT_PROFILE, type Offer, type Profile } from "../shared/finance.ts";
 
 export interface Rates {
@@ -40,63 +41,114 @@ export function useStored<T>(key: string, initial: T | (() => T)) {
   return [value, setValue] as const;
 }
 
+const json = (method: string, body: unknown): RequestInit => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+export interface ProfileState {
+  profile: Profile;
+  extra: ProfileExtra;
+  /** null mientras carga; false si el usuario aún no ha dado ningún dato */
+  known: boolean | null;
+  /** claves de KEY_FACTS que aún no ha dado */
+  missing: string[];
+}
+
 /**
  * Perfil del usuario. La fuente de verdad es el servidor (lo actualizan el formulario, el agente y el
  * servidor MCP). El formulario envía solo los campos que cambian, agrupados cada 800 ms.
  */
 export function useProfile() {
-  const [profile, setProfile] = useState<Profile>(DEFAULT_PROFILE);
-  const [known, setKnown] = useState<boolean | null>(null);
+  const [state, setState] = useState<ProfileState>({ profile: DEFAULT_PROFILE, extra: {}, known: null, missing: [] });
   const pending = useRef<Partial<Profile>>({});
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const reload = () =>
-    fetch("/api/profile")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d: { profile: Profile; known: boolean } | null) => {
-        if (!d) return;
-        setProfile(d.profile);
-        setKnown(d.known);
-      })
-      .catch(() => {});
+  const reload = useCallback(
+    () =>
+      fetch("/api/profile")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: (Omit<ProfileState, "missing"> & { facts: { missing: string[] } }) | null) => {
+          if (d) setState({ profile: d.profile, extra: d.extra, known: d.known, missing: d.facts.missing });
+        })
+        .catch(() => {}),
+    [],
+  );
 
   useEffect(() => {
     reload();
-  }, []);
+  }, [reload]);
 
   const update = (patch: Partial<Profile>) => {
-    setProfile((p) => ({ ...p, ...patch }));
+    setState((s) => ({ ...s, profile: { ...s.profile, ...patch } }));
     pending.current = { ...pending.current, ...patch };
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
-      const body = JSON.stringify({ profile: pending.current });
+      const body = { profile: pending.current };
       pending.current = {};
-      fetch("/api/profile", { method: "PATCH", headers: { "Content-Type": "application/json" }, body })
-        .then((r) => r.ok && setKnown(true))
-        .catch(() => {});
+      fetch("/api/profile", json("PATCH", body)).then(reload).catch(() => {});
     }, 800);
   };
-  /** el agente ha cambiado el perfil: se pinta sin volver a enviarlo */
-  const replace = (p: Profile) => {
-    setProfile(p);
-    setKnown(true);
+  return { ...state, update, reload };
+}
+
+/** Viviendas guardadas: las usan el chat (tarjetas), el panel lateral y «Mis viviendas». */
+export function useHomes() {
+  const [homes, setHomes] = useState<SavedHome[]>([]);
+  const reload = useCallback(
+    () =>
+      fetch("/api/homes?all=1")
+        .then((r) => (r.ok ? r.json() : []))
+        .then(setHomes)
+        .catch(() => {}),
+    [],
+  );
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  const save = async (listing: ListingInput) => {
+    const r = await fetch("/api/homes", json("POST", { listing }));
+    if (r.ok) await reload();
+    return r.ok;
   };
-  return { profile, known, update, replace, reload };
+  const patch = async (id: string, body: { status?: HomeStatus; notes?: string }) => {
+    const r = await fetch(`/api/homes/${encodeURIComponent(id)}`, json("PATCH", body));
+    if (r.ok) {
+      const updated: SavedHome = await r.json();
+      setHomes((list) => list.map((h) => (h.id === id ? updated : h)));
+    }
+  };
+  const remove = async (id: string) => {
+    await fetch(`/api/homes/${encodeURIComponent(id)}`, { method: "DELETE" });
+    setHomes((list) => list.filter((h) => h.id !== id));
+  };
+  return { homes, reload, save, patch, remove };
+}
+export type HomesStore = ReturnType<typeof useHomes>;
+
+export interface Provider {
+  kind: "anthropic" | "ollama" | "none";
+  model: string | null;
+  label: string;
+  vision: boolean;
+  hint: string | null;
 }
 
 export interface Status {
-  ai: boolean;
   db: "postgres" | "pglite";
-  model: string;
+  provider: Provider;
 }
 
 export function useStatus(): Status | null {
   const [status, setStatus] = useState<Status | null>(null);
   useEffect(() => {
-    fetch("/api/status")
-      .then((r) => (r.ok ? r.json() : null))
-      .then(setStatus)
-      .catch(() => setStatus(null));
+    const load = () =>
+      fetch("/api/status")
+        .then((r) => (r.ok ? r.json() : null))
+        .then(setStatus)
+        .catch(() => setStatus(null));
+    load();
+    // por si arrancas Ollama o cambias la clave con la página abierta
+    const id = setInterval(load, 30_000);
+    return () => clearInterval(id);
   }, []);
   return status;
 }

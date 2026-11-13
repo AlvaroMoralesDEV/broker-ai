@@ -56,8 +56,20 @@ export function extractFacts(message: string): ExtractedFacts {
     if (v >= 500 && v <= 5_000_000) profile.savings = v;
   }
 
+  // sueldo de la otra persona: "mi pareja cobra 1.500 en 12 pagas" (no es el sueldo del usuario)
+  const partner = first(t, String.raw`\b(?:pareja|novi[oa]|mujer|marido|espos[oa]|chic[oa]|el|ella)\s+(?:cobra|gana|ingresa)\D{0,20}?(${NUM})(?:\D{0,15}?(\d{2})\s*pagas)?`);
+  if (partner) {
+    const v = parseNumberEs(partner[1]);
+    if (v >= 300 && v <= 15000) {
+      extra.coBuyer = true;
+      extra.coBuyerNetPay = v;
+      if (partner[2] && Number(partner[2]) >= 12 && Number(partner[2]) <= 16) extra.coBuyerPagas = Number(partner[2]);
+    }
+  }
+  const own = partner ? t.replace(partner[0], " ") : t;
+
   // sueldo neto por nómina: "cobro 1.900 netos", "mi sueldo es de 1900", "gano 2.100 al mes"
-  const pay = first(t, String.raw`(?:cobro|cobramos|gano|sueldo|salario|nomina|ingreso|ingresos)(?:(?!ahorr)\D){0,30}?(${NUM})([^.;\n]{0,25})`);
+  const pay = first(own,String.raw`(?:cobro|cobramos|gano|sueldo|salario|nomina|ingreso|ingresos)(?:(?!ahorr)\D){0,30}?(${NUM})([^.;\n]{0,25})`);
   if (pay) {
     const v = parseNumberEs(pay[1]);
     const after = pay[2];
@@ -65,7 +77,7 @@ export function extractFacts(message: string): ExtractedFacts {
     else if (/al ano|anual/.test(after) || v > 15000) doubts.push("¿Ese sueldo es anual? Dime el neto de cada nómina y cuántas pagas tienes.");
     else if (v >= 300) extra.netPay = v;
   }
-  const pagas = first(t, String.raw`(\d{2})\s*pagas`);
+  const pagas = first(own, String.raw`(\d{2})\s*pagas`);
   if (pagas && [12, 13, 14, 15, 16].includes(Number(pagas[1]))) extra.pagas = Number(pagas[1]);
 
   // deudas
@@ -107,13 +119,18 @@ export function extractAnswer(pending: string, message: string): ExtractedFacts 
     netIncome: /cobr|sueld|salari|nomina|gano|brut|pagas/,
     monthlyDebts: /deuda|prestamo|letra|cuota|tarjeta/,
   };
-  if (Object.entries(TOPIC).some(([key, re]) => key !== pending && re.test(t))) return out;
+  const topic = pending === "coBuyerNetPay" ? "netIncome" : pending;
+  if (Object.entries(TOPIC).some(([key, re]) => key !== topic && re.test(t))) return out;
 
   if (pending === "savings" && nums.length === 1 && nums[0] >= 500) out.profile.savings = nums[0];
   else if (pending === "netIncome" && nums.length >= 1 && nums[0] >= 300 && nums[0] <= 15000 && !/brut|anual|al ano/.test(t)) {
     out.extra.netPay = nums[0];
     const pagas = nums.slice(1).find((n) => n >= 12 && n <= 16);
     if (pagas) out.extra.pagas = pagas;
+  } else if (pending === "coBuyerNetPay" && nums.length >= 1 && nums[0] >= 300 && nums[0] <= 15000 && !/brut|anual|al ano/.test(t)) {
+    out.extra.coBuyerNetPay = nums[0];
+    const pagas = nums.slice(1).find((n) => n >= 12 && n <= 16);
+    if (pagas) out.extra.coBuyerPagas = pagas;
   } else if (pending === "monthlyDebts" && (no || (nums.length === 1 && nums[0] <= 5000))) out.profile.monthlyDebts = no ? 0 : nums[0];
   else if (pending === "coBuyer") {
     if (/\bsol[oa]\b/.test(t)) out.extra.coBuyer = false;

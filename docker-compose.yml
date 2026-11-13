@@ -30,6 +30,12 @@ services:
       DATABASE_URL: postgres://broker:${POSTGRES_PASSWORD:-broker}@db:5432/broker
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5-5}
+      # Sin clave de Claude se usa el Ollama instalado en tu ordenador (no dentro de Docker: ahí iría más lento)
+      LLM_PROVIDER: ${LLM_PROVIDER:-auto}
+      OLLAMA_HOST: ${OLLAMA_HOST_DOCKER:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:8787:8787"
     volumes:

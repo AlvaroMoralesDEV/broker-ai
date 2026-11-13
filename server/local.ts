@@ -12,10 +12,24 @@ import { makeContext, runTool, type ToolContext } from "./tools.ts";
 
 type Msg = store.StoredMessage;
 
+const PARTNER_PAY = {
+  key: "coBuyerNetPay",
+  question: "¿Cuánto cobra neto la otra persona en cada nómina, y en cuántas pagas? Sus ingresos suman para el banco.",
+};
+
+/** Datos que conviene preguntar, en orden: si compra acompañado, primero el sueldo de la otra persona. */
+async function pendingFacts(): Promise<{ key: string; question: string }[]> {
+  const { extra } = await store.getProfile();
+  const missing = missingKeyFacts(await store.givenFields());
+  return extra.coBuyer && extra.coBuyerNetPay == null ? [PARTNER_PAY, ...missing] : missing;
+}
+
 const WANTS_SAVE = /\b(guarda(la|lo|r|me)?|guardala|apunta(la|r)?|anade(la)?|me la quedo|quiero (visitarla|seguirla))\b/;
 const ASKS_BUDGET = /cuanto puedo|presupuesto|permitir|hasta cuanto|precio maximo|que puedo comprar/;
 const ASKS_HOMES = /compara|mis viviendas|mis pisos|guardad[ao]s|cual (es|me) (la )?(mejor|conviene)/;
-const ASKS_OFFERS = /(hipoteca|banco|fija|variable|mixta|tipo de interes).*(mejor|convien|oferta|compar|barat|cual)|(mejor|convien|oferta|compar|barat|cual|que).*(hipoteca|banco)/;
+const ASKS_OFFERS = /(hipoteca|banco|fija|variable|mixta).*(mejor|convien|oferta|ofrece|compar|barat|cual)|(mejor|convien|oferta|ofrece|compar|barat|cual|que banco).*(hipoteca|banco)/;
+/** Preguntas de explicación ("¿qué es el euríbor?"): van al modelo, no a una calculadora. */
+const EXPLAIN = /^\W*(que es|que son|que significa|que diferencia|cual es la diferencia|como funciona|como se calcula|explica|por que|para que sirve)/;
 const GREETING = /^(hola|buenas|buenos dias|hey|ey|empez|empecemos)|primera (casa|vivienda)|quiero comprar|hazme las preguntas/;
 const ASKS_PRICE = /(puedo comprar|me llega|me alcanza|podria comprar|permitirme).*?(\d{1,3}(?:\.\d{3})+|\d{5,8})|(\d{1,3}(?:\.\d{3})+|\d{5,8})\s*(?:€|euros?).*(puedo|llega|alcanza)/;
 
@@ -118,7 +132,7 @@ export async function runLocal(
   const text = turn.text.trim();
   const t = norm(text);
   const interviewStarted = history.some((m) => m.role === "assistant");
-  const pending = missingKeyFacts(await store.givenFields())[0]?.key;
+  const pending = (await pendingFacts())[0]?.key;
 
   const userMsg: Msg = { role: "user", content: [{ type: "text", text }] };
   await store.appendMessage(conversationId, userMsg);
@@ -207,7 +221,7 @@ export async function runLocal(
     }
   }
 
-  if (!handled) {
+  if (!handled && !EXPLAIN.test(t)) {
     const price = t.match(ASKS_PRICE);
     if (price) {
       const value = parseNumberEs(price[2] ?? price[3]);
@@ -258,7 +272,7 @@ export async function runLocal(
   }
 
   // La entrevista la lleva el código: siguiente dato que falta, en orden de impacto.
-  const missing = missingKeyFacts(await store.givenFields());
+  const missing = await pendingFacts();
   const essentials = missing.some((m) => m.key === "savings" || m.key === "netIncome");
   if (missing.length && (factsTurn || essentials)) say(missing[0].question);
   else if (factsTurn && !missing.length) say("Con esto ya tengo todo lo importante. Cuando veas un anuncio que te guste, pégamelo y lo revisamos.");

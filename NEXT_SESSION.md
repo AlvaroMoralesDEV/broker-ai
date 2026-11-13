@@ -2,6 +2,26 @@
 
 Written 2026-11-13. Read the **Status** section first; the rest is the original plan.
 
+## Status (end of session 3, 2026-11-13)
+
+**Done this session:** Phase 3 (chat-first interface) and a local-AI mode, so the app needs no API key.
+
+- **Provider auto-selection** (`server/provider.ts`): Claude if `ANTHROPIC_API_KEY` is set, else Ollama if it is running with a model, else a no-AI mode. Docker reaches the host's Ollama through `host.docker.internal`.
+- **Local mode is a deterministic router, not a weaker agent** (`server/local.ts`). Measured on this laptop: `qwen3:4b` hangs, `qwen3:1.7b` picks tools but fills arguments wrong. So code extracts facts and listing fields (`shared/extract.ts`), writes the broker's answer (`server/summaries.ts`) and drives the interview; the local model only answers free questions, with a glossary and the user's context.
+- **Interface:** left sidebar (navigation, conversations with delete), chat in the centre (streaming, step chips, listing cards with a Save button, collapsible long pastes, retry on error, drag-and-drop/paste of screenshots when the model has vision), right panel (budget, "what I know about you" checklist with progress, saved homes). Side panels become drawers below 1180 px / 820 px. Deep links: `/#viviendas`, `/#calc`, `/?c=<conversation id>`.
+- **Interview details:** partner's income is asked when buying with someone; gross or yearly pay is questioned, not saved; a fact equal to the engine default ("no tengo deudas") now counts as given.
+- **Tests:** 48 passing, including the whole interview, listing evaluation and saving with no model. Verified live: local model through Docker, screenshots at desktop and phone widths.
+
+**Still not verified:** the Claude path. No API key has been available in any session, so the full agent (`runClaude` in `server/agent.ts`), screenshot reading and web search have never run against the real API. It typechecks and the tool layer is tested, but expect to fix things on first contact.
+
+**Known weak spots**
+- Listing parser is tuned to Idealista text copied from the page; other portals and unusual layouts will miss fields. Missing fields are listed in the answer, so it fails visibly.
+- Fact extraction is regex-based: it handles the phrasings in the tests, not every way of saying things. Unrecognised messages go to the local model, which cannot save data.
+- Local model answers to open questions are shallow and occasionally wrong on details.
+- No fair-price-per-m² check yet (decision 5 still open).
+
+**Next (in order):** run the demo with a real listing and fix what breaks → eval set of scripted conversations (works without a key for local mode) → Phase 4 RAG (would replace the hard-coded glossary and improve local answers the most) → Phase 5 MCP over HTTP + skills.
+
 ## Status (end of session 2, 2026-11-13)
 
 **Done:** Phase 0, Phase 1 and most of Phase 2, built as one vertical slice: paste a listing → verdict with reasons → saved → still there after a restart → recalculated when the situation changes.

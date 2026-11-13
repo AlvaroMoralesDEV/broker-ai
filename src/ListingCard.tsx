@@ -20,16 +20,18 @@ interface Props {
   /** "guardada" si se sabe que está guardada pero no su estado */
   status?: HomeStatus | "guardada";
   onStatus?: (s: HomeStatus) => void;
+  /** si se pasa y la vivienda no está guardada, muestra el botón Guardar */
+  onSave?: () => void;
   onSimulate: () => void;
   children?: ReactNode;
 }
 
-export function ListingCard({ listing: l, analysis: a, flags = [], status, onStatus, onSimulate, children }: Props) {
+export function ListingCard({ listing: l, analysis: a, flags = [], status, onStatus, onSave, onSimulate, children }: Props) {
   const facts = [
     l.size ? `${l.size} m²` : null,
     l.rooms != null ? `${l.rooms} hab.` : null,
     l.bathrooms ? `${l.bathrooms} baño${l.bathrooms > 1 ? "s" : ""}` : null,
-    l.floor ? (/^(bajo|bj)$/i.test(l.floor) ? "Bajo" : /^\d+$/.test(l.floor) ? `Planta ${l.floor}` : l.floor) : null,
+    l.floor ? (/^(bajo|bj)$/i.test(l.floor) ? "Bajo" : /^\d+$/.test(l.floor) ? `Planta ${l.floor}` : l.floor.replace(/^atico$/i, "ático").replace(/sotano/i, "sótano").replace(/^./, (c) => c.toUpperCase())) : null,
     l.hasLift ? "Ascensor" : l.hasLift === false ? "Sin ascensor" : null,
     l.parking ? "Garaje" : null,
     l.newDevelopment ? "Obra nueva" : null,
@@ -73,7 +75,10 @@ export function ListingCard({ listing: l, analysis: a, flags = [], status, onSta
         )}
         {children}
         <div className="card-actions">
-          <button onClick={onSimulate}>Simular</button>
+          {onSave && !status && <button onClick={onSave}>☆ Guardar</button>}
+          <button className={onSave && !status ? "ghost" : undefined} onClick={onSimulate}>
+            Simular
+          </button>
           {l.url && (
             <a className="button ghost" href={l.url} target="_blank" rel="noreferrer">
               Ver anuncio

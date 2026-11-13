@@ -51,7 +51,8 @@ export function listingSummary(me: StoredProfile, l: HomeListing): string {
   ];
   if (own.community || own.ibi) lines.push(`- **Coste real al mes:** ${eur(own.total)} contando comunidad${own.ibi ? " e IBI" : ""}.`);
   lines.push(`- **Impuestos:** ${a.tax.label} en ${ccaaName(l.ccaa ?? me.profile.ccaa)}.`);
-  for (const r of a.reasons) lines.push(`- ${r}`);
+  // en «justa» el motivo añade información (el préstamo personal); en los demás casos repetiría lo de arriba
+  if (a.verdict === "justo") for (const r of a.reasons) lines.push(`- ${r}`);
 
   if (flags.length) {
     lines.push("", "**Alertas del anuncio**");
@@ -78,6 +79,8 @@ const FIELD_LABEL: Record<string, (v: unknown) => string> = {
   age: (v) => `${v} años`,
   contractType: (v) => `contrato ${v}`,
   coBuyer: (v) => (v ? "compras con otra persona" : "compras solo"),
+  coBuyerNetPay: (v) => `sueldo neto de la otra persona ${eur(v as number)} por paga`,
+  coBuyerPagas: (v) => `${v} pagas la otra persona`,
   ccaa: (v) => `compra en ${ccaaName(v as Profile["ccaa"])}`,
   targetZones: (v) => `zonas: ${(v as string[]).join(", ")}`,
   timeline: (v) => `plazo: ${v}`,
@@ -96,7 +99,10 @@ export function factsSummary(before: StoredProfile, after: StoredProfile & { cha
   const noted = after.changed.filter((f) => FIELD_LABEL[f]).map((f) => FIELD_LABEL[f](values[f]));
   const lines: string[] = [];
   if (noted.length) lines.push(`Apuntado: ${noted.join(", ")}.`);
-  if (after.changed.includes("netIncome") && after.extra.netPay) lines.push(`Eso son **${eur(after.profile.netIncome)} netos al mes** de media para el banco.`);
+  if (after.changed.includes("netIncome") && after.extra.netPay) {
+    const both = after.extra.coBuyer && after.extra.coBuyerNetPay ? ", sumando los dos sueldos" : "";
+    lines.push(`Eso son **${eur(after.profile.netIncome)} netos al mes** de media para el banco${both}.`);
+  }
   const moneyChanged = after.changed.some((f) => ["savings", "netIncome", "monthlyDebts", "age", "ccaa"].includes(f));
   if (moneyChanged) {
     lines.push("", budgetLine(after.profile));
@@ -140,7 +146,7 @@ export function offersSummary(me: StoredProfile, type?: "fija" | "variable" | "m
   const rates = loadRates();
   const p = me.profile;
   const loan = Math.round((affordability(p).maxPrice * p.ltvPct) / 100);
-  if (loan <= 0) return "Antes de comparar hipotecas necesito tus ahorros y tu sueldo para saber qué importe pedirías.";
+  if (!me.known || loan <= 0) return "Antes de comparar hipotecas necesito tus ahorros y tu sueldo para saber qué importe pedirías.";
   const quoted = rates.offers
     .filter((o) => !type || o.type === type)
     .map((o) => ({ o, q: quoteOffer(o, loan, p.years, rates.euribor.monthlyAvg, p.age) }))
@@ -148,7 +154,7 @@ export function offersSummary(me: StoredProfile, type?: "fija" | "variable" | "m
     .slice(0, 4);
   const lines = [`Para una hipoteca de **${eur(loan)}** a ${p.years} años (tu máximo), las cuotas más bajas${type ? ` en ${type}` : ""} según los datos del ${rates.updated}:`, ""];
   for (const { o, q } of quoted) {
-    lines.push(`- **${o.bank}** · ${o.product} (${o.type}): ${eur(q.initialPayment)}/mes, TIN ${pct(o.tinBonif)} con bonificaciones, TAE ${pct(o.tae)}`);
+    lines.push(`- **${o.bank}** · ${o.product} (${o.type}): ${eur(q.initialPayment)}/mes, TIN ${pct(o.tinBonif)} con bonificaciones${o.tae != null ? `, TAE ${pct(o.tae)}` : ""}`);
   }
   lines.push("", `Euríbor de ${rates.euribor.month}: ${pct(rates.euribor.monthlyAvg)}. Son puntos de partida para negociar: la oferta real depende de tu perfil y exige bonificaciones (nómina, seguros).`);
   return lines.join("\n");

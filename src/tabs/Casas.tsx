@@ -1,45 +1,27 @@
-import { useEffect, useMemo, useState } from "react";
-import { redFlags, type HomeStatus, type SavedHome } from "../../shared/broker.ts";
+import { useMemo, useState } from "react";
+import { redFlags } from "../../shared/broker.ts";
 import { analyzePurchase, type Profile } from "../../shared/finance.ts";
-import { eur } from "../lib.ts";
+import { eur, type HomesStore } from "../lib.ts";
 import { ListingCard } from "../ListingCard.tsx";
 import { Segmented, VerdictBadge } from "../ui.tsx";
 
 type Filter = "activas" | "descartadas";
 
-/** Viviendas guardadas (por el agente o desde aquí), recalculadas con tu perfil actual. */
-export function MisViviendas({ profile, onSimulate }: { profile: Profile; onSimulate: (price: number) => void }) {
-  const [homes, setHomes] = useState<SavedHome[] | null>(null);
+interface Props {
+  profile: Profile;
+  store: HomesStore;
+  onSimulate: (price: number) => void;
+  onAskBroker: () => void;
+}
+
+/** Viviendas guardadas (por el agente o desde una tarjeta), recalculadas con tu perfil actual. */
+export function MisViviendas({ profile, store, onSimulate, onAskBroker }: Props) {
+  const { homes, patch, remove } = store;
   const [filter, setFilter] = useState<Filter>("activas");
-  const [error, setError] = useState<string | null>(null);
-
-  const load = () =>
-    fetch("/api/homes?all=1")
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`Error ${r.status}`))))
-      .then(setHomes)
-      .catch(() => setError("No hay conexión con el servidor local."));
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  async function patch(id: string, body: { status?: HomeStatus; notes?: string }) {
-    const r = await fetch(`/api/homes/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (r.ok) {
-      const updated: SavedHome = await r.json();
-      setHomes((list) => list?.map((h) => (h.id === id ? updated : h)) ?? null);
-    }
-  }
-
-  async function remove(id: string) {
-    if (!confirm("¿Borrar esta vivienda y su histórico de precios?")) return;
-    await fetch(`/api/homes/${encodeURIComponent(id)}`, { method: "DELETE" });
-    setHomes((list) => list?.filter((h) => h.id !== id) ?? null);
-  }
 
   const rows = useMemo(
     () =>
-      (homes ?? [])
+      homes
         .filter((h) => (filter === "descartadas") === (h.status === "descartada"))
         .map((h) => {
           const l = h.listing;
@@ -48,17 +30,14 @@ export function MisViviendas({ profile, onSimulate }: { profile: Profile; onSimu
         }),
     [homes, filter, profile],
   );
-  const discarded = homes?.filter((h) => h.status === "descartada").length ?? 0;
-
-  if (error) return <p className="note bad">{error}</p>;
-  if (!homes) return <p className="muted">Cargando…</p>;
+  const discarded = homes.filter((h) => h.status === "descartada").length;
 
   return (
-    <div className="stack">
+    <div className="page stack">
       <div className="results-head">
         <div>
-          <h2>Mis viviendas</h2>
-          <p className="muted">Recalculadas con tu perfil de ahora. Para añadir una, pégale el anuncio a tu bróker y pídele que la guarde.</p>
+          <h2 className="page-title">Mis viviendas</h2>
+          <p className="muted">Recalculadas con tu situación de hoy. Para añadir una, pega el anuncio en el chat y pulsa Guardar.</p>
         </div>
         <Segmented<Filter>
           value={filter}
@@ -134,7 +113,7 @@ export function MisViviendas({ profile, onSimulate }: { profile: Profile; onSimu
               )}
               {h.savedVerdict && h.savedVerdict !== a.verdict && (
                 <p className="small muted">
-                  Al guardarla {h.savedVerdict === "ok" ? "te encajaba" : h.savedVerdict === "justo" ? "era justa" : "estaba fuera de presupuesto"}: ha cambiado tu
+                  Al guardarla {h.savedVerdict === "ok" ? "te encajaba" : h.savedVerdict === "justo" ? "iba justa" : "estaba fuera de presupuesto"}: ha cambiado tu
                   situación.
                 </p>
               )}
@@ -145,18 +124,29 @@ export function MisViviendas({ profile, onSimulate }: { profile: Profile; onSimu
                 placeholder="Notas: visita, dudas, lo que te dijo la agencia…"
                 onBlur={(e) => e.target.value !== (h.notes ?? "") && patch(h.id, { notes: e.target.value })}
               />
-              <button className="link" onClick={() => remove(h.id)}>
+              <button className="link danger" onClick={() => confirm("¿Borrar esta vivienda y su histórico de precios?") && remove(h.id)}>
                 Borrar
               </button>
             </ListingCard>
           );
         })}
-        {rows.length === 0 && (
-          <p className="empty">
-            {filter === "activas" ? "Aún no tienes viviendas guardadas. Pega un anuncio de Idealista en el chat con tu bróker." : "No has descartado ninguna."}
-          </p>
-        )}
       </div>
+      {rows.length === 0 && (
+        <div className="empty-state">
+          <span className="empty-icon" aria-hidden>
+            ⌂
+          </span>
+          {filter === "activas" ? (
+            <>
+              <h3>Aún no sigues ninguna vivienda</h3>
+              <p className="muted">Abre un anuncio en Idealista, copia el texto y pégalo en el chat. Tu bróker lo revisa y lo guardas con un clic.</p>
+              <button onClick={onAskBroker}>Ir al chat</button>
+            </>
+          ) : (
+            <p className="muted">No has descartado ninguna.</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

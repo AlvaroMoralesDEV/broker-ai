@@ -49,10 +49,13 @@ export async function updateProfile(
   const profile = { ...current.profile, ...patch };
   const extra = { ...current.extra, ...extraPatch };
 
+  // Un dato cuenta como "dado" la primera vez que el usuario lo dice, aunque coincida con el valor
+  // por defecto del motor (p. ej. "no tengo deudas" = 0).
+  const given = await givenFields();
   const changes: [string, unknown, unknown][] = [];
   for (const [k, v] of Object.entries(patch)) {
     const before = current.profile[k as keyof Profile];
-    if (!current.known || !same(before, v)) changes.push([k, current.known ? before : null, v]);
+    if (!given.has(k) || !same(before, v)) changes.push([k, given.has(k) ? before : null, v]);
   }
   for (const [k, v] of Object.entries(extraPatch)) {
     const before = current.extra[k as keyof ProfileExtra];
