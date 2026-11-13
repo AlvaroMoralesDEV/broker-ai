@@ -147,3 +147,33 @@ test("las preguntas de explicación no se confunden con pedir ofertas o presupue
   }
   assert.deepEqual((await say("¿Qué banco me ofrece la mejor hipoteca?")).tools, ["mortgage_offers"]);
 });
+
+test("un saludo a secas: se presenta y pregunta en qué ayudar, sin interrogar", async () => {
+  const fresh = await openDb("memory://");
+  setDb(fresh);
+  try {
+    const id = await store.createConversation("saludo");
+    const run = async (text: string) => {
+      const events: ChatEvent[] = [];
+      await runLocal(NONE, id, { text }, (e) => events.push(e), new AbortController().signal);
+      return events.map((e) => (e.type === "text" ? e.text : "")).join("");
+    };
+    const hello = await run("Hola!");
+    assert.match(hello, /Soy un agente de IA especializado/);
+    assert.match(hello, /¿En qué puedo ayudarte\?/);
+    assert.doesNotMatch(hello, /¿Cuánto tienes ahorrado/);
+    assert.match(await run("buenas tardes"), /agente de IA/);
+    // pedir empezar sí arranca la entrevista
+    assert.match(await run("empezar"), /¿Cuánto tienes ahorrado/);
+  } finally {
+    setDb(db);
+    await fresh.close();
+  }
+});
+
+test("saludo cuando ya le conoce", async () => {
+  const r = await say("hola");
+  assert.match(r.text, /Hola de nuevo/);
+  assert.match(r.text, /Tengo guardada tu situación/);
+  assert.doesNotMatch(r.text, /\?[^?]*\?/, "una sola pregunta");
+});

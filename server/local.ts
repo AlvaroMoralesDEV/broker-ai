@@ -30,7 +30,10 @@ const ASKS_HOMES = /compara|mis viviendas|mis pisos|guardad[ao]s|cual (es|me) (l
 const ASKS_OFFERS = /(hipoteca|banco|fija|variable|mixta).*(mejor|convien|oferta|ofrece|compar|barat|cual)|(mejor|convien|oferta|ofrece|compar|barat|cual|que banco).*(hipoteca|banco)/;
 /** Preguntas de explicación ("¿qué es el euríbor?"): van al modelo, no a una calculadora. */
 const EXPLAIN = /^\W*(que es|que son|que significa|que diferencia|cual es la diferencia|como funciona|como se calcula|explica|por que|para que sirve)/;
-const GREETING = /^(hola|buenas|buenos dias|hey|ey|empez|empecemos)|primera (casa|vivienda)|quiero comprar|hazme las preguntas/;
+/** Un saludo y nada más: se presenta y pregunta en qué ayudar, sin lanzarse a la entrevista. */
+const HELLO = /^\W*(hola+|buenas|buenos dias|buenas tardes|buenas noches|hey|ey|saludos|que tal)([\s,]+(que tal|buenas|buenos dias|como estas|como va))?\W*$/;
+/** Quiere empezar: arranca la entrevista. */
+const GREETING = /empez|empecemos|primera (casa|vivienda)|quiero comprar|hazme las preguntas|entrevista/;
 const ASKS_PRICE = /(puedo comprar|me llega|me alcanza|podria comprar|permitirme).*?(\d{1,3}(?:\.\d{3})+|\d{5,8})|(\d{1,3}(?:\.\d{3})+|\d{5,8})\s*(?:€|euros?).*(puedo|llega|alcanza)/;
 
 const HELP = `Esto lo hago al momento, sin esperas:
@@ -173,6 +176,24 @@ export async function runLocal(
 
   let handled = Boolean(turn.images?.length && !text);
   let factsTurn = false;
+  let justGreeted = false;
+
+  if (!handled && HELLO.test(t)) {
+    const following = (await store.listHomes()).length;
+    say(
+      ctx.me.known
+        ? `¡Hola de nuevo! Soy tu agente de IA especializado en compra de vivienda e hipotecas. Tengo guardada tu situación${following ? ` y ${following === 1 ? "la vivienda que sigues" : `las ${following} viviendas que sigues`}` : ""}. ¿En qué puedo ayudarte hoy?`
+        : `¡Hola! Soy un agente de IA especializado en compra de vivienda e hipotecas en España. ¿En qué puedo ayudarte?
+
+Por ejemplo, puedo:
+- Calcular **cuánto puedes permitirte** según tus ahorros y tu sueldo.
+- **Revisar un anuncio** que hayas visto: si te encaja, cuánto cuesta de verdad y qué alertas tiene.
+- **Comparar hipotecas** y explicarte lo que no entiendas.
+
+Si quieres que empecemos por tu presupuesto, dime «empezar».`,
+    );
+    handled = justGreeted = true;
+  }
 
   if (!handled && looksLikeListing(text)) {
     const listing = parseListingText(text)!;
@@ -243,7 +264,7 @@ export async function runLocal(
       say(offersSummary(ctx.me, only));
       handled = true;
     } else if (GREETING.test(t) && !ctx.me.known) {
-      say("¡Hola! Soy tu bróker. Te ayudo a saber cuánto puedes comprar, a revisar los anuncios que encuentres y a elegir hipoteca. Para empezar necesito conocer tu situación; son unas pocas preguntas.");
+      say("¡Vamos a ello! Soy tu bróker: te ayudo a saber cuánto puedes comprar, a revisar los anuncios que encuentres y a elegir hipoteca. Para empezar necesito conocer tu situación; son unas pocas preguntas.");
       handled = factsTurn = true;
     }
   }
@@ -274,7 +295,9 @@ export async function runLocal(
   // La entrevista la lleva el código: siguiente dato que falta, en orden de impacto.
   const missing = await pendingFacts();
   const essentials = missing.some((m) => m.key === "savings" || m.key === "netIncome");
-  if (missing.length && (factsTurn || essentials)) say(missing[0].question);
+  if (justGreeted) {
+    // solo ha saludado: no se le interroga todavía
+  } else if (missing.length && (factsTurn || essentials)) say(missing[0].question);
   else if (factsTurn && !missing.length) say("Con esto ya tengo todo lo importante. Cuando veas un anuncio que te guste, pégamelo y lo revisamos.");
 
   if (reply.trim()) await store.appendMessage(conversationId, { role: "assistant", content: [{ type: "text", text: reply }] });
