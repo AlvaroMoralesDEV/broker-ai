@@ -206,7 +206,9 @@ Suggested name: **`broker-ia`** (alternatives: `casa-agent`, `homebroker-agent`)
 Do it with Claude Code closed, because Windows locks the current directory:
 
 ```powershell
-Rename-Item C:\Users\34658\Projects\hipoteca-searcher broker-ia
+cd C:\Users\34658\Projects\hipoteca-searcher; docker compose down   # keeps the data volume
+cd ..; Rename-Item hipoteca-searcher broker-ia
+cd broker-ia; docker compose up -d   # compose project name is fixed to broker-ia, so the same volume is reused
 ```
 
 Then open Claude Code in the new folder. Claude Code keys its per-project memory on the folder path; there is nothing saved there yet, so nothing is lost.
