@@ -1,0 +1,7 @@
+node_modules
+dist
+.env
+# datos personales: nunca al repositorio
+data/profile.json
+data/pglite/
+*.xlsx
