@@ -1,22 +1,23 @@
-// Servidor MCP (stdio): expone las mismas herramientas que usa el asistente de la web para que
-// Claude Desktop, Claude Code u otro cliente MCP pueda buscar viviendas y calcular tu hipoteca.
+// Servidor MCP (stdio): las mismas herramientas del agente bróker para Claude Desktop, Claude Code
+// u otro cliente MCP. Lee y escribe en la misma base de datos que la web.
 //
-//   claude mcp add hipoteca -- npx tsx C:/ruta/a/hipoteca-searcher/server/mcp.ts
+//   claude mcp add broker -e DATABASE_URL=postgres://broker:broker@localhost:5433/broker -- npx tsx <ruta>/server/mcp.ts
 //
+// Con Docker (docker compose up db) usa DATABASE_URL. Sin DATABASE_URL abre la base de datos embebida
+// (data/pglite), que solo admite un proceso: no lo arranques a la vez que `npm run dev`.
 import "./env.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { TOOLS, loadProfile, type ToolContext, type ToolName } from "./tools.ts";
+import { TOOLS, makeContext, runTool, type ToolName } from "./tools.ts";
 
-const server = new McpServer({ name: "hipoteca-searcher", version: "0.1.0" });
+const server = new McpServer({ name: "broker-ia", version: "0.2.0" });
 
 for (const name of Object.keys(TOOLS) as ToolName[]) {
   const tool = TOOLS[name];
   server.registerTool(name, { description: tool.description, inputSchema: tool.schema.shape }, async (input: unknown) => {
     try {
-      // el perfil se relee en cada llamada: es el que guardas desde la web (data/profile.json)
-      const ctx: ToolContext = { profile: loadProfile() };
-      const output = await (tool.run as (i: unknown, c: ToolContext) => Promise<unknown>)(input, ctx);
+      // el perfil se relee en cada llamada: puede haber cambiado desde la web
+      const output = await runTool(name, input, await makeContext("mcp"));
       return { content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }] };
     } catch (err) {
       return { isError: true, content: [{ type: "text" as const, text: err instanceof Error ? err.message : String(err) }] };

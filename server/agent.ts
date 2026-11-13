@@ -1,24 +1,17 @@
-// Asistente IA: Claude con herramientas propias (búsqueda de viviendas + cálculo de hipoteca).
+// El agente bróker: Claude con herramientas propias, memoria en base de datos y entrevista inicial.
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
-import type { Profile } from "../shared/finance.ts";
+import { KEY_FACTS } from "../shared/broker.ts";
+import type { ChatEvent, DisplayMsg, ImageInput } from "../shared/chat.ts";
 import { ccaaName } from "../shared/taxes.ts";
-import { TOOLS, loadRates, type AnalyzedListing, type ToolContext, type ToolName } from "./tools.ts";
-import type { SearchResult } from "../shared/listings.ts";
+import * as store from "./store.ts";
+import { TOOLS, loadRates, makeContext, runTool, type ToolName } from "./tools.ts";
 
-const MODEL = "claude-opus-5-5";
+export const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-5-5";
+const MAX_STEPS = 16;
 
-export type AgentEvent =
-  | { type: "text"; text: string }
-  | { type: "tool"; name: string; input: unknown }
-  | { type: "listings"; result: SearchResult; listings: AnalyzedListing[] }
-  | { type: "error"; message: string }
-  | { type: "done" };
-
-export interface ChatTurn {
-  role: "user" | "assistant";
-  content: string;
-}
+type Block = Anthropic.Beta.BetaContentBlockParam;
+type Msg = store.StoredMessage;
 
 function toolDefinitions(): Anthropic.Beta.BetaToolUnion[] {
   const custom = (Object.keys(TOOLS) as ToolName[]).map((name): Anthropic.Beta.BetaTool => {
@@ -33,43 +26,103 @@ function toolDefinitions(): Anthropic.Beta.BetaToolUnion[] {
   return [...custom, { type: "web_search_20260209", name: "web_search", max_uses: 4 }];
 }
 
-function systemPrompt(profile: Profile): string {
+// Parte fija del prompt (se cachea). Lo que cambia (perfil, fecha) va en un segundo bloque.
+const INSTRUCTIONS = `Eres el bróker hipotecario e inmobiliario personal del usuario: alguien que quiere comprar vivienda en España. Trabajas para él, no para un banco ni una agencia. Tu trabajo:
+
+1. Conocer su situación financiera y mantenerla al día.
+2. Decirle con números cuánto puede comprar y qué le limita.
+3. Evaluar los anuncios que te pega (texto o capturas de Idealista u otro portal): si puede comprarlo, coste real, alertas y qué preguntar.
+4. Guardar las viviendas que le interesan, seguirlas (estado, notas, cambios de precio) y compararlas.
+5. Orientarle con la hipoteca: tipos, bancos, bonificaciones, y los pasos de la compra.
+
+## Cómo trabajas
+- Todos los números salen de las herramientas (mismo motor que el resto de la aplicación). No calcules cuotas, impuestos ni presupuestos de cabeza.
+- Cuando el usuario te cuente algo de su situación (ahorros, sueldo, contrato, deudas, pareja, zonas, plazos), llama a update_profile en ese momento, con su frase en 'note'. Si corrige un dato, actualízalo. Después dile en una frase cómo cambia su presupuesto y, si tiene viviendas guardadas, cuáles cambian de veredicto.
+- Pregunta el sueldo como neto por nómina y número de pagas (12 o 14), no por semanas ni en bruto.
+- Cuando pegue un anuncio: evaluate_listing con todos los datos que veas (pasa la descripción completa en 'description' para que salten las alertas). Responde con: veredicto en una línea, coste real (ahorros necesarios, cuota, gastos al mes), las alertas que importen, lo que falta en el anuncio, y 2-4 preguntas para el vendedor o la agencia. Pregunta si quiere guardarla; si ya lo ha pedido, save_home directamente.
+- Si el anuncio no dice algo (comunidad, IBI, planta, ascensor), no lo inventes: omítelo y señálalo como pregunta pendiente.
+- No tienes acceso a buscar anuncios en portales: el usuario los busca y te los pega. Si te pide buscar, díselo y ofrécele qué filtros poner en Idealista según su presupuesto.
+- Para saber si un precio por m² es razonable puedes buscar en la web informes de precios por zona; cita la fuente y la fecha, y dilo como orientación.
+- Los impuestos y las reducciones para jóvenes tienen requisitos (renta, edad, valor máximo, empadronamiento); cuando cambien mucho el resultado, menciónalo. Las ofertas de bancos son punto de partida para negociar, no ofertas en firme.
+
+## Entrevista
+Si el perfil no está guardado o faltan datos clave, entrevístale como lo haría un bróker: una o dos preguntas cada vez, en orden de impacto (ahorros, sueldo neto y pagas, contrato y antigüedad, deudas, si compra solo o acompañado, comunidad autónoma, zonas, plazo). En cuanto tengas ahorros e ingresos, dale una primera cifra de presupuesto y sigue con lo demás. No le hagas un formulario de diez preguntas seguidas. Si te pega un anuncio antes de la entrevista, evalúalo igualmente y avisa de que el análisis usa datos de ejemplo hasta que te dé los suyos.
+
+## Estilo
+Responde en el idioma del usuario, directo y con cifras concretas en euros. Markdown sencillo: negritas y listas cortas, sin tablas. Las viviendas que evalúas o guardas aparecen como tarjetas debajo de tu respuesta: no repitas todos sus datos, comenta lo que importa.`;
+
+async function contextBlock(): Promise<string> {
+  const { profile: p, extra, known } = await store.getProfile();
+  const given = await store.givenFields();
+  if (given.has("netPay")) given.add("netIncome");
+  const missing = KEY_FACTS.filter((f) => !given.has(f.key)).map((f) => f.ask);
+  const homes = await store.listHomes();
   const rates = loadRates();
-  return `Eres el asistente de "Hipoteca Searcher", una aplicación personal para alguien que va a comprar su primera vivienda en España. Le ayudas a entender cuánto puede permitirse, a comparar hipotecas y a encontrar viviendas que encajen.
-
-Su perfil guardado en la aplicación:
-- Edad: ${profile.age} años
-- Ingresos netos del hogar: ${profile.netIncome} €/mes; otras deudas: ${profile.monthlyDebts} €/mes
-- Ahorros: ${profile.savings} €
-- Comunidad autónoma: ${ccaaName(profile.ccaa)}; ${profile.firstHome ? "primera vivienda habitual" : "no es primera vivienda"}; ${profile.newBuild ? "obra nueva" : "segunda mano"}
-- Hipoteca que está simulando: ${profile.ltvPct} % de financiación, ${profile.ratePct} % TIN, ${profile.years} años, endeudamiento máximo ${profile.debtRatioPct} %
-
-Los datos de hipotecas de la aplicación se actualizaron el ${rates.updated} (euríbor medio de ${rates.euribor.month}: ${rates.euribor.monthlyAvg} %).
-
-Haz los números siempre con las herramientas en lugar de calcularlos de cabeza: así coinciden con lo que la persona ve en el resto de la aplicación. Las viviendas que devuelve search_homes se muestran automáticamente como tarjetas debajo de tu respuesta, así que no hace falta que las repitas una a una: comenta cuáles destacan y por qué. Si la búsqueda devuelve viviendas de ejemplo, dilo con claridad, porque no son anuncios reales.
-
-Los impuestos y los tipos reducidos para jóvenes son orientativos y tienen requisitos (renta, empadronamiento, valor máximo); cuando un tipo reducido cambie mucho el resultado, menciónalo. Las ofertas de los bancos cambian cada mes y la oferta real depende del perfil: preséntalas como punto de partida para negociar, no como una oferta en firme. Puedes buscar en la web si te preguntan por algo más reciente que los datos de la aplicación.
-
-Responde en el idioma en que te escriban, con cifras concretas en euros y sin rodeos. Usa Markdown sencillo (negritas y listas cortas); evita las tablas.`;
+  const today = new Date().toISOString().slice(0, 10);
+  const lines = [
+    `Fecha de hoy: ${today}. Datos de hipotecas de la aplicación: ${rates.updated} (euríbor medio de ${rates.euribor.month}: ${rates.euribor.monthlyAvg} %).`,
+    known
+      ? `Perfil guardado: ${p.age} años; ingresos netos del hogar ${p.netIncome} €/mes; deudas ${p.monthlyDebts} €/mes; ahorros ${p.savings} €; ${ccaaName(p.ccaa)}; ${p.firstHome ? "primera vivienda" : "no es primera vivienda"}; simulando ${p.ltvPct} % de financiación al ${p.ratePct} % a ${p.years} años. Datos de bróker: ${JSON.stringify(extra)}.`
+      : "Perfil: AÚN NO GUARDADO. Empieza por la entrevista.",
+    missing.length ? `Datos clave que aún no te ha dado: ${missing.join("; ")}.` : "Tienes todos los datos clave.",
+    `Viviendas guardadas: ${homes.length}${homes.length ? ` (${homes.map((h) => `${h.listing.title}, ${h.listing.price} €, ${h.status}`).join(" | ")})` : ""}.`,
+  ];
+  return lines.join("\n");
 }
 
-export async function runAgent(history: ChatTurn[], profile: Profile, emit: (e: AgentEvent) => void, signal: AbortSignal): Promise<void> {
-  const client = new Anthropic();
-  const ctx: ToolContext = {
-    profile,
-    onListings: (result, listings) => emit({ type: "listings", result, listings }),
-  };
-  const tools = toolDefinitions();
-  const messages: Anthropic.Beta.BetaMessageParam[] = history.map((t) => ({ role: t.role, content: t.content }));
+const isToolUse = (b: Block): b is Anthropic.Beta.BetaToolUseBlockParam => b.type === "tool_use";
+const blocksOf = (m: Msg): Block[] => (typeof m.content === "string" ? [{ type: "text", text: m.content }] : m.content);
 
-  for (let step = 0; step < 12; step++) {
+/** Si el turno anterior se cortó entre la llamada a una herramienta y su resultado, se añade un resultado de "interrumpido". */
+function danglingToolResults(history: Msg[]): Msg | null {
+  const last = history.at(-1);
+  if (!last || last.role !== "assistant") return null;
+  const calls = blocksOf(last).filter(isToolUse);
+  if (!calls.length) return null;
+  return {
+    role: "user",
+    content: calls.map((c) => ({ type: "tool_result" as const, tool_use_id: c.id, is_error: true, content: "Interrumpido por el usuario antes de terminar." })),
+  };
+}
+
+export interface UserTurn {
+  text: string;
+  images?: ImageInput[];
+}
+
+export async function runAgent(conversationId: string, turn: UserTurn, emit: (e: ChatEvent) => void, signal: AbortSignal): Promise<void> {
+  const client = new Anthropic();
+  const ctx = await makeContext("chat", conversationId, (e) => emit(e));
+  const tools = toolDefinitions();
+
+  const messages = await store.getMessages(conversationId);
+  const repair = danglingToolResults(messages);
+  if (repair) {
+    await store.appendMessage(conversationId, repair);
+    messages.push(repair);
+  }
+  const userMsg: Msg = {
+    role: "user",
+    content: [
+      ...(turn.images ?? []).map((img): Block => ({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } })),
+      { type: "text", text: turn.text },
+    ],
+  };
+  await store.appendMessage(conversationId, userMsg);
+  messages.push(userMsg);
+
+  for (let step = 0; step < MAX_STEPS; step++) {
     const stream = client.beta.messages.stream(
       {
         model: MODEL,
-        max_tokens: 16000,
-        system: systemPrompt(profile),
+        max_tokens: 32000,
+        system: [
+          { type: "text", text: INSTRUCTIONS, cache_control: { type: "ephemeral" } },
+          { type: "text", text: await contextBlock() },
+        ],
         tools,
         messages,
+        output_config: { effort: "medium" },
         // Si un clasificador de seguridad rechaza la petición, la API la reintenta con otro modelo.
         betas: ["server-side-fallback-2026-07-01"],
         fallbacks: "default",
@@ -88,32 +141,69 @@ export async function runAgent(history: ChatTurn[], profile: Profile, emit: (e: 
       return;
     }
 
-    messages.push({ role: "assistant", content: message.content });
+    // El contenido se guarda tal cual (incluidos los bloques de razonamiento): el historial solo crece.
+    const assistant: Msg = { role: "assistant", content: message.content as Block[] };
+    await store.appendMessage(conversationId, assistant);
+    messages.push(assistant);
     if (message.stop_reason === "pause_turn") continue;
 
+    for (const b of message.content) if (b.type === "server_tool_use") emit({ type: "tool", name: b.name });
     const calls = message.content.filter((b): b is Anthropic.Beta.BetaToolUseBlock => b.type === "tool_use");
     if (calls.length === 0) return;
 
     const results = await Promise.all(
       calls.map(async (call): Promise<Anthropic.Beta.BetaToolResultBlockParam> => {
-        emit({ type: "tool", name: call.name, input: call.input });
-        const tool = TOOLS[call.name as ToolName];
-        if (!tool) return { type: "tool_result", tool_use_id: call.id, is_error: true, content: `Herramienta desconocida: ${call.name}` };
-        const parsed = tool.schema.safeParse(call.input);
-        if (!parsed.success) {
-          return { type: "tool_result", tool_use_id: call.id, is_error: true, content: `Parámetros no válidos: ${parsed.error.message}` };
-        }
+        emit({ type: "tool", name: call.name });
         try {
-          const output = await (tool.run as (i: unknown, c: ToolContext) => Promise<unknown>)(parsed.data, ctx);
+          const output = await runTool(call.name, call.input, ctx);
           return { type: "tool_result", tool_use_id: call.id, content: JSON.stringify(output) };
         } catch (err) {
           return { type: "tool_result", tool_use_id: call.id, is_error: true, content: err instanceof Error ? err.message : String(err) };
         }
       }),
     );
-    messages.push({ role: "user", content: results });
+    const resultMsg: Msg = { role: "user", content: results };
+    await store.appendMessage(conversationId, resultMsg);
+    messages.push(resultMsg);
   }
-  emit({ type: "error", message: "He hecho demasiados pasos sin terminar. Prueba con una pregunta más concreta." });
+  emit({ type: "error", message: "He hecho demasiados pasos sin terminar. Prueba con una petición más concreta." });
+}
+
+/** Historial para pintar: agrupa los pasos de cada respuesta y saca las tarjetas de viviendas. */
+export function toDisplay(history: Msg[]): DisplayMsg[] {
+  const out: DisplayMsg[] = [];
+  let current: DisplayMsg | null = null;
+  for (const m of history) {
+    const blocks = blocksOf(m);
+    if (m.role === "user") {
+      if (blocks.every((b) => b.type === "tool_result")) continue;
+      current = null;
+      out.push({
+        role: "user",
+        text: blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n").trim(),
+        images: blocks.filter((b) => b.type === "image").length,
+        tools: [],
+        homes: [],
+      });
+      continue;
+    }
+    if (!current) {
+      current = { role: "assistant", text: "", tools: [], homes: [], images: 0 };
+      out.push(current);
+    }
+    for (const b of blocks) {
+      if (b.type === "text" && b.text.trim()) current.text += (current.text ? "\n\n" : "") + b.text;
+      else if (b.type === "server_tool_use") current.tools.push(b.name);
+      else if (isToolUse(b)) {
+        current.tools.push(b.name);
+        if (b.name === "evaluate_listing" || b.name === "save_home") {
+          const { status: _s, notes: _n, ...listing } = b.input as Record<string, unknown>;
+          current.homes.push({ listing: listing as unknown as DisplayMsg["homes"][number]["listing"], savedId: b.name === "save_home" ? "guardada" : undefined });
+        }
+      }
+    }
+  }
+  return out;
 }
 
 export function describeError(err: unknown): string {
