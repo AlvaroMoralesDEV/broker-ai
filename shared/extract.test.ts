@@ -139,6 +139,11 @@ test("ahorros que cambian: se da el cambio, no un total", () => {
   assert.equal(change("tengo más de 20.000 ahorrados").savingsChange, undefined);
   assert.equal(change("tengo más de 20.000 ahorrados").profile.savings, 20000);
   assert.equal(change("Tengo 30.000 € ahorrados").savingsChange, undefined);
+  // sin la palabra «ahorros»: vale una orden si se acaba de hablar de los ahorros
+  assert.equal(extractFacts("réstale 5 mil euros", { savingsTopic: true }).savingsChange, -5000);
+  assert.equal(extractFacts("pero te he dicho que le restes 5 mil", { savingsTopic: true }).savingsChange, -5000);
+  assert.equal(extractFacts("réstale 5 mil euros").savingsChange, undefined, "sin contexto no se sabe a qué");
+  assert.equal(extractFacts("pago 300 menos de alquiler", { savingsTopic: true }).savingsChange, undefined, "solo órdenes, no cualquier «menos»");
   // dudoso: se pregunta el total
   assert.equal(change("quita algo de los ahorros").doubts.length, 1);
   assert.equal(change("resta 2.000 y suma 500 al ahorro").doubts.length, 1);

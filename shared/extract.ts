@@ -48,6 +48,12 @@ const SAVINGS_DOWN = String.raw`\b(?:rest\w*|quit\w*|descont\w*|descuent\w*|redu
 // «más» cuenta, pero no «más de 20.000» (eso es una cantidad aproximada, no un aumento)
 const SAVINGS_UP = String.raw`\b(?:sum\w*|anad\w*|agreg\w*|aument\w*)\b|\bmas\b(?!\s+de\b)`;
 
+/** Órdenes de sumar o restar («réstale», «quita», «súmale», «añade»), con o sin pronombre. */
+const CHANGE_ORDER = String.raw`\b(?:rest[ae]s?|quit[ae]s?|sum[ae]s?|anad[ea]s?|descuent[ae]s?|agreg[ae]s?)(?:le|les)?\b`;
+
+/** ¿Pide sumar o restar una cantidad? («réstale 5 mil», «pero te he dicho que le restes 5.000») */
+export const asksToChangeAmount = (message: string): boolean => new RegExp(CHANGE_ORDER).test(norm(message)) && numbersIn(message).some((n) => n >= 100);
+
 /**
  * ¿El mensaje cambia los ahorros en vez de darlos? «réstale al ahorro 20 mil», «he gastado 3.000 de los
  * ahorros», «súmale 5.000 a mis ahorros». Devuelve null si no es un cambio relativo; si lo es pero no está
@@ -56,9 +62,11 @@ const SAVINGS_UP = String.raw`\b(?:sum\w*|anad\w*|agreg\w*|aument\w*)\b|\bmas\b(
  * Existe porque «réstale 20.000» contiene un número junto a «ahorro», y guardarlo como ahorros totales
  * cambia el presupuesto sin que nada falle.
  */
-export function savingsChangeIn(message: string): { change: number } | { doubt: string } | null {
+export function savingsChangeIn(message: string, savingsTopic = false): { change: number } | { doubt: string } | null {
   const t = norm(message);
-  if (!/ahorr/.test(t)) return null;
+  // sin la palabra «ahorros» solo vale una orden explícita, y solo si se acaba de hablar de los ahorros:
+  // «suma 40 mil a los ahorros» y a continuación «réstale 5 mil»
+  if (!/ahorr/.test(t) && !(savingsTopic && new RegExp(CHANGE_ORDER).test(t))) return null;
   const down = new RegExp(SAVINGS_DOWN).test(t);
   const up = new RegExp(SAVINGS_UP).test(t);
   if (!down && !up) return null;
@@ -69,14 +77,14 @@ export function savingsChangeIn(message: string): { change: number } | { doubt: 
 }
 
 /** Datos de la situación del usuario que se pueden leer sin ambigüedad en su mensaje. */
-export function extractFacts(message: string): ExtractedFacts {
+export function extractFacts(message: string, context: { savingsTopic?: boolean } = {}): ExtractedFacts {
   const t = norm(message);
   const profile: Partial<Profile> = {};
   const extra: Partial<ProfileExtra> = {};
   const doubts: string[] = [];
 
   // ahorros que cambian: "réstale al ahorro 20 mil" (el total lo calcula update_profile)
-  const change = savingsChangeIn(message);
+  const change = savingsChangeIn(message, context.savingsTopic);
   // ahorros: "42.000 € ahorrados", "tengo 42k de ahorros", "mis ahorros son 42.000", "tengo 42.000 euros"
   const savings = change
     ? null

@@ -4,7 +4,7 @@
 import { randomUUID } from "node:crypto";
 import { isLinkOnly, linkIn, missingKeyFacts, toHomeListing, type ListingInput } from "../shared/broker.ts";
 import type { ChatEvent } from "../shared/chat.ts";
-import { extractAnswer, extractFacts, looksLikeListing, norm, numbersIn, parseListingText, parseNumberEs } from "../shared/extract.ts";
+import { asksToChangeAmount, extractAnswer, extractFacts, looksLikeListing, norm, numbersIn, parseListingText, parseNumberEs } from "../shared/extract.ts";
 import { ollama, type ProviderInfo } from "./provider.ts";
 import * as store from "./store.ts";
 import { GLOSSARY, bankOffersSummary, budgetLine, eur, factsSummary, homesSummary, listingSummary, offersSummary } from "./summaries.ts";
@@ -104,6 +104,31 @@ function recentLink(history: Msg[]): string | null {
   return null;
 }
 
+/**
+ * ¿Se acaba de hablar de los ahorros? Los últimos mensajes del usuario los mencionan, o el último cambio
+ * de perfil fue de los ahorros. Así «réstale 5 mil» se entiende como «réstale 5 mil a los ahorros».
+ */
+function talkingAboutSavings(history: Msg[]): boolean {
+  let userTexts = 0;
+  for (const m of [...history].reverse()) {
+    if (typeof m.content === "string") continue;
+    for (const b of m.content) {
+      if (b.type === "tool_use" && b.name === "update_profile") {
+        const input = b.input as Record<string, unknown>;
+        return input.savings != null || input.savingsChange != null;
+      }
+    }
+    if (m.role === "user" && textOf(m)) {
+      if (/ahorr/i.test(textOf(m))) return true;
+      if (++userTexts >= 2) return false;
+    }
+  }
+  return false;
+}
+
+/** El modelo local dice que ha guardado o cambiado algo: no puede, así que es falso. */
+const CLAIMS_CHANGE = /\b(he (apuntado|guardado|actualizado|cambiado|restado|sumado|anotado|quitado|modificado)|(ya )?(esta|queda|quedan|lo tengo) (apuntad|guardad|actualizad)\w*|apuntado:|pasan de)/;
+
 /** Respuesta del modelo local a una pregunta libre, con el contexto del usuario y un glosario. */
 async function localAnswer(model: string, history: Msg[], ctx: ToolContext, onText: (t: string) => void, signal: AbortSignal): Promise<string> {
   const homes = await store.listHomes();
@@ -118,6 +143,7 @@ async function localAnswer(model: string, history: Msg[], ctx: ToolContext, onTe
     .join("\n");
   const system = `Eres un bróker hipotecario en España que ayuda a una persona a comprar vivienda. Responde en español, claro y breve (máximo 6 frases o una lista corta).
 Reglas:
+- No puedes guardar ni cambiar ningún dato del usuario. Nunca digas que has apuntado, sumado, restado o actualizado algo: si te lo pide, dile que no lo has entendido y que lo diga como «réstale 5.000 a los ahorros» o «tengo 30.000 ahorrados».
 - No inventes cifras en euros ni porcentajes concretos. Usa solo las del CONTEXTO y el GLOSARIO; si hace falta un cálculo, di al usuario que te pida «cuánto puedo permitirme» o que pegue el anuncio.
 - No puedes buscar anuncios ni ver páginas web. El usuario pega el texto del anuncio.
 - Si no sabes algo, dilo.
@@ -157,7 +183,12 @@ ${context}`;
   // cifras en euros que no salen del contexto: se avisa, porque un modelo pequeño se equivoca con los números
   const known = new Set(numbersIn(`${context} ${recent.map((r) => r.content).join(" ")}`));
   const invented = [...norm(out).matchAll(/(\d{1,3}(?:\.\d{3})+|\d{4,8})\s*(?:€|euros?)/g)].some((m) => !known.has(parseNumberEs(m[1])));
-  if (invented) {
+  // decir que ha cambiado un dato sin haberlo hecho es peor que no contestar: se desmiente en el acto
+  if (CLAIMS_CHANGE.test(norm(out))) {
+    const note = "\n\n_Corrección: el modelo local no puede cambiar tus datos y **no se ha guardado nada**. Lo que tengo apuntado es lo que ves en «Lo que sé de ti». Para cambiarlo dímelo así: «réstale 5.000 a los ahorros» o «tengo 30.000 ahorrados»._";
+    out += note;
+    onText(note);
+  } else if (invented) {
     const note = "\n\n_Comprueba esas cifras: el modelo local puede equivocarse con los números. Las fiables son las de las tarjetas y el panel._";
     out += note;
     onText(note);
@@ -300,7 +331,7 @@ Si quieres que empecemos por tu presupuesto, dime «empezar».`,
   }
 
   if (!handled) {
-    const facts = extractFacts(text);
+    const facts = extractFacts(text, { savingsTopic: talkingAboutSavings(history.slice(0, -1)) });
     if (pending && interviewStarted && !facts.doubts.length) {
       const answer = extractAnswer(pending, text);
       facts.profile = { ...answer.profile, ...facts.profile };
@@ -359,6 +390,12 @@ Si quieres que empecemos por tu presupuesto, dime «empezar».`,
       say("¡Vamos a ello! Soy tu bróker: te ayudo a saber cuánto puedes comprar, a revisar los anuncios que encuentres y a elegir hipoteca. Para empezar necesito conocer tu situación; son unas pocas preguntas.");
       handled = factsTurn = true;
     }
+  }
+
+  // Pide sumar o restar algo y no se sabe a qué: se pregunta, en vez de dejar que el modelo finja hacerlo.
+  if (!handled && asksToChangeAmount(text)) {
+    say("¿A qué quieres que se lo sume o reste: a tus ahorros, a tu sueldo o a tus deudas? Dímelo entero, por ejemplo «réstale 5.000 a los ahorros».");
+    handled = asked = true;
   }
 
   // Nada ha entendido el mensaje y lo último fue una pregunta cerrada de la entrevista: se pide aclaración.

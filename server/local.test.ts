@@ -158,6 +158,30 @@ test("«réstale al ahorro 20 mil»: resta a lo guardado, no guarda 20.000", asy
   assert.equal((await store.getProfile()).profile.savings, before);
 });
 
+test("«suma 40 mil a los ahorros» y luego «réstale 5 mil»: la segunda también se aplica", async () => {
+  const start = (await store.getProfile()).profile.savings;
+  await say("suma a los ahorros 40 mil euros");
+  assert.equal((await store.getProfile()).profile.savings, start + 40000);
+  const r = await say("restale 5 mil euros");
+  assert.deepEqual(r.tools, ["update_profile"], "lo guarda el código, no lo contesta el modelo");
+  assert.equal((await store.getProfile()).profile.savings, start + 35000);
+  const again = await say("pero te he dicho que le restes 5 mil");
+  assert.equal((await store.getProfile()).profile.savings, start + 30000);
+  assert.match(again.text, /pasan de/);
+  // vuelve a como estaba para los tests siguientes
+  await say(`tengo ${start} € ahorrados`);
+  assert.equal((await store.getProfile()).profile.savings, start);
+});
+
+test("una orden de restar sin saber a qué: pregunta, no la pasa al modelo", async () => {
+  // lo último que ha cambiado son las deudas, no los ahorros
+  await say("No tengo deudas");
+  await say("¿qué es el euríbor?");
+  const r = await say("réstale 300");
+  assert.deepEqual(r.tools, []);
+  assert.match(r.text, /¿A qué quieres que se lo sume o reste/);
+});
+
 test("si compra acompañado, pregunta el sueldo de la otra persona y lo suma", async () => {
   const before = (await store.getProfile()).profile.netIncome;
   const r = await say("Al final compro con mi pareja");
