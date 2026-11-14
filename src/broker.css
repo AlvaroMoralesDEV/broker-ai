@@ -216,6 +216,7 @@ button.link:hover:not(:disabled), button.icon:hover:not(:disabled), .tabs button
 
 /* --- vivienda guardada solo con el enlace (sin datos todavía) --- */
 .card.link-only { border-style: dashed; }
+.offer.fit-no { opacity: 0.72; }
 .badge.link-badge { background: var(--accent-soft); color: var(--accent-text); }
 .link-url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dot.pending { background: transparent; border: 2px solid var(--muted); }

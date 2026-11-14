@@ -2,7 +2,7 @@
 // perfil, presupuesto, comparativa y ofertas. En modo local o sin IA son la respuesta; son instantáneas
 // y sus cifras salen del motor de cálculo.
 import { isLinkOnly, monthlyOwnership, redFlags, type HomeListing, type RedFlag, type SavedHome } from "../shared/broker.ts";
-import { affordability, analyzePurchase, quoteOffer, type Profile } from "../shared/finance.ts";
+import { affordability, analyzePurchase, rankOffers, type Profile, type RankedOffer } from "../shared/finance.ts";
 import { compareOffers, offerDefaults, type ReceivedOffer } from "../shared/offers.ts";
 import { ccaaName } from "../shared/taxes.ts";
 import type { StoredProfile } from "./store.ts";
@@ -156,16 +156,61 @@ export function offersSummary(me: StoredProfile, type?: "fija" | "variable" | "m
   const p = me.profile;
   const loan = Math.round((affordability(p).maxPrice * p.ltvPct) / 100);
   if (!me.known || loan <= 0) return "Antes de comparar hipotecas necesito tus ahorros y tu sueldo para saber qué importe pedirías.";
-  const quoted = rates.offers
-    .filter((o) => !type || o.type === type)
-    .map((o) => ({ o, q: quoteOffer(o, loan, p.years, rates.euribor.monthlyAvg, p.age) }))
-    .sort((x, y) => x.q.initialPayment - y.q.initialPayment)
-    .slice(0, 4);
-  const lines = [`Para una hipoteca de **${eur(loan)}** a ${p.years} años (tu máximo), las cuotas más bajas${type ? ` en ${type}` : ""} según los datos del ${rates.updated}:`, ""];
-  for (const { o, q } of quoted) {
-    lines.push(`- **${o.bank}** · ${o.product} (${o.type}): ${eur(q.initialPayment)}/mes, TIN ${pct(o.tinBonif)} con bonificaciones${o.tae != null ? `, TAE ${pct(o.tae)}` : ""}`);
+  const maxPayment = affordability(p).maxPayment;
+  const ranked = rankOffers(
+    rates.offers.filter((o) => !type || o.type === type),
+    { loan, years: p.years, age: p.age, ltvPct: p.ltvPct, netIncome: p.netIncome, civilServant: me.extra.contractType === "funcionario" },
+    rates.euribor.monthlyAvg,
+  );
+  const name = (r: RankedOffer) => `**${r.offer.bank}** · ${r.offer.product} (${r.offer.type})`;
+  const numbers = (r: RankedOffer) => {
+    const o = r.offer;
+    const first = o.initialYears === 1 ? "el primer año" : `${o.initialYears} años`;
+    const payment = r.quote.laterPayment != null ? `${eur(r.quote.initialPayment)}/mes ${first}, luego ${eur(r.quote.laterPayment)}` : `${eur(r.quote.initialPayment)}/mes`;
+    const up = r.stress ? ` · si el euríbor sube 2 puntos: ${eur(r.stress.plus2.payment)}/mes${r.stress.plus2.payment > maxPayment ? " ⚠️ por encima de tu cuota máxima" : ""}` : "";
+    return `${payment} · coste total ${eur(r.totalCost)} · TIN ${pct(r.ratePct)}${o.tae != null && r.ratePct === o.tinBonif ? `, TAE ${pct(o.tae)}` : ""}${up}`;
+  };
+  const ok = ranked.filter((r) => r.fit === "ok");
+  const unbonified = ranked.filter((r) => r.fit === "sin-bonificar");
+  const out = ranked.filter((r) => r.fit === "no");
+
+  const lines = [
+    `Para una hipoteca de **${eur(loan)}** a ${p.years} años (tu máximo), ordenadas por lo que pagarías en total (intereses de todo el plazo más comisión de apertura), con datos del ${rates.updated}:`,
+    "",
+  ];
+  if (ok.length) {
+    lines.push(`**Las que puedes pedir${type ? ` (${type})` : ""}**`);
+    const shown = ok.slice(0, 4);
+    // que se vea también la mejor variable o mixta, aunque no esté entre las más baratas
+    const bestFloating = ok.find((r) => r.stress);
+    if (bestFloating && !shown.includes(bestFloating)) shown.push(bestFloating);
+    for (const r of shown) lines.push(`- ${name(r)}: ${numbers(r)}`);
+  } else lines.push("Con tus datos de hoy no cumples del todo los requisitos de ninguna de las ofertas que tengo.");
+  if (unbonified.length) {
+    lines.push("", "**Podrías, pero sin el tipo bonificado**");
+    for (const r of unbonified.slice(0, 3)) lines.push(`- ${name(r)}: ${numbers(r)}. ${r.reasons.join(" ")}`);
   }
-  lines.push("", `Euríbor de ${rates.euribor.month}: ${pct(rates.euribor.monthlyAvg)}. Son puntos de partida para negociar: la oferta real depende de tu perfil y exige bonificaciones (nómina, seguros).`);
+  if (out.length) {
+    lines.push("", "**No encajan contigo**");
+    for (const r of out.slice(0, 4)) lines.push(`- ${name(r)}: ${r.reasons.join(" ")}`);
+  }
+
+  // fija contra variable o mixta, con el riesgo en euros
+  const fixed = ok.find((r) => r.offer.type === "fija");
+  const floating = ok.find((r) => r.stress);
+  if (fixed && floating?.stress) {
+    const today = floating.totalCost - fixed.totalCost;
+    const plus2 = floating.stress.plus2.totalCost - fixed.totalCost;
+    const diff = (n: number) => `${eur(Math.abs(n))} ${n < 0 ? "menos" : "más"}`;
+    lines.push(
+      "",
+      `**¿Fija o ${floating.offer.type}?** Si el euríbor no se mueve, la ${floating.offer.type} de ${floating.offer.bank} cuesta ${diff(today)} que la fija de ${fixed.offer.bank}. Si sube 2 puntos, cuesta ${diff(plus2)} y su cuota llega a ${eur(floating.stress.plus2.payment)}/mes (tu cuota máxima es ${eur(maxPayment)}). La fija no cambia: ${eur(fixed.quote.initialPayment)}/mes.`,
+    );
+  }
+  lines.push(
+    "",
+    `Euríbor de ${rates.euribor.month}: ${pct(rates.euribor.monthlyAvg)}. El coste total no incluye el precio de los seguros y productos vinculados: cuando un banco te haga una oferta, apúntala en **Ofertas de bancos** y te digo cuál sale más barata contándolos. Son puntos de partida para negociar.`,
+  );
   const age = ratesAgeDays(rates);
   if (age > RATES_STALE_DAYS) lines.push("", `⚠️ Estos datos tienen ${age} días: confirma el tipo actual con el banco antes de decidir.`);
   return lines.join("\n");

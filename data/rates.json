@@ -18,6 +18,7 @@
       "id": "ibercaja-fija", "bank": "Ibercaja", "product": "Hipoteca Vamos fija", "type": "fija", "channel": "Oficina",
       "tinBonif": 2.55, "tinNoBonif": 3.55, "tae": 3.49, "maxLtv": 80, "youngLtv": { "ltv": 95, "maxAge": 35 }, "maxYears": 25,
       "bonificaciones": ["Nómina ≥ 2.500 €", "3 recibos", "Tarjeta (12 usos/semestre)", "Seguro hogar", "Seguro vida", "75 €/mes a fondo"],
+      "requirements": { "minLoan": 100000, "payrollForBonus": 2500 },
       "openingFee": 0, "notes": "Hasta 95 % con 35 años o menos. Préstamo mínimo 100.000 €. El primer año se aplica el tipo bonificado aunque no cumplas."
     },
     {
@@ -30,6 +31,7 @@
       "id": "openbank-fija", "bank": "Openbank", "product": "Hipoteca Fija", "type": "fija", "channel": "Online",
       "tinBonif": 2.80, "tinNoBonif": 3.30, "tae": 3.41, "maxLtv": 80, "maxYears": 30,
       "bonificaciones": ["Nómina/pensión ≥ 900 € (−0,30)", "Seguro hogar (−0,10)", "Seguro vida (−0,10)"],
+      "requirements": { "payrollForBonus": 900 },
       "openingFee": 0, "notes": "El TIN varía con el plazo: Rankia da 2,80 % (TAE a 15 años) y Gibobs 2,86 % para plazos de 21-25 años. Sin comisión por amortización parcial."
     },
     {
@@ -42,6 +44,7 @@
       "id": "bbva-fija", "bank": "BBVA", "product": "Hipoteca Fija", "type": "fija", "channel": "Oficina",
       "tinBonif": 2.95, "tinNoBonif": 3.95, "tae": 3.78, "maxLtv": 80, "maxYears": 30,
       "bonificaciones": ["Nómina > 600 € + seguro hogar (−0,50)", "Seguro de amortización (−0,50)"],
+      "requirements": { "payrollForBonus": 600 },
       "openingFee": 0, "notes": "2,85 % solo para plazos de hasta 15 años; 2,95 % de 16 a 30 años."
     },
     {
@@ -54,12 +57,14 @@
       "id": "myinvestor-fija", "bank": "MyInvestor", "product": "Hipoteca Tipo Fijo", "type": "fija", "channel": "Online",
       "tinBonif": 3.40, "tinNoBonif": 3.40, "tae": 3.61, "maxLtv": 80, "maxYears": 30,
       "bonificaciones": [],
+      "requirements": { "minLoan": 100000, "minHouseholdIncome": 4000, "minHouseholdIncomeCivilServant": 3000 },
       "openingFee": 0, "notes": "Sin vinculaciones. Exige ingresos netos del hogar ≥ 4.000 €/mes (3.000 € funcionarios) y préstamo mínimo de 100.000 €."
     },
     {
       "id": "bankinter-fija", "bank": "Bankinter", "product": "Hipoteca Fija", "type": "fija", "channel": "Oficina",
       "tinBonif": 3.50, "tinNoBonif": 4.80, "tae": 4.09, "maxLtv": 80, "maxYears": 30,
       "bonificaciones": ["Nómina ≥ 2.500 €", "Seguro vida", "Seguro hogar", "Plan de pensiones"],
+      "requirements": { "payrollForBonus": 2500 },
       "openingFee": 500, "notes": "Comisión de apertura de 500 €."
     },
 
@@ -71,8 +76,9 @@
     },
     {
       "id": "kutxabank-variable", "bank": "Kutxabank", "product": "Hipoteca Variable", "type": "variable", "channel": "Oficina",
-      "tinBonif": 2.27, "tinNoBonif": null, "initialYears": 1, "diffBonif": 0.49, "diffNoBonif": null, "tae": 4.11, "maxLtv": 80, "maxYears": 30,
+      "tinBonif": 2.27, "tinNoBonif": null, "initialYears": 1, "diffBonif": 0.49, "diffNoBonif": 1.49, "tae": 4.11, "maxLtv": 80, "maxYears": 30,
       "bonificaciones": ["Nómina 3.000 €/mes", "2.400 €/año a EPSV o plan de pensiones", "Seguro hogar"],
+      "requirements": { "payrollForBonus": 3000 },
       "openingFee": null, "notes": "Si no cumples los requisitos el diferencial sube un punto."
     },
     {
@@ -85,6 +91,7 @@
       "id": "ibercaja-variable", "bank": "Ibercaja", "product": "Hipoteca Vamos variable", "type": "variable", "channel": "Oficina",
       "tinBonif": 2.00, "tinNoBonif": null, "initialYears": 1, "diffBonif": 0.60, "diffNoBonif": null, "tae": 4.59, "maxLtv": 80, "maxYears": 30,
       "bonificaciones": ["Nómina ≥ 2.500 €", "3 recibos", "Tarjeta", "Seguro hogar", "Seguro vida", "75 €/mes a fondo"],
+      "requirements": { "payrollForBonus": 2500 },
       "openingFee": 0, "notes": ""
     },
 
@@ -92,6 +99,7 @@
       "id": "ibercaja-mixta-10", "bank": "Ibercaja", "product": "Mixta 10 Vamos", "type": "mixta", "channel": "Oficina",
       "tinBonif": 2.10, "tinNoBonif": null, "initialYears": 10, "diffBonif": 0.60, "diffNoBonif": null, "tae": 3.59, "maxLtv": 80, "maxYears": 30,
       "bonificaciones": ["Nómina ≥ 2.500 €", "3 recibos", "Tarjeta", "Seguro hogar", "Seguro vida", "75 €/mes a fondo"],
+      "requirements": { "payrollForBonus": 2500 },
       "openingFee": 0, "notes": "10 años fijos y después euríbor + 0,60."
     },
     {
@@ -104,6 +112,7 @@
       "id": "ibercaja-mixta-5", "bank": "Ibercaja", "product": "Mixta 5 Vamos", "type": "mixta", "channel": "Oficina",
       "tinBonif": 2.00, "tinNoBonif": null, "initialYears": 5, "diffBonif": 0.60, "diffNoBonif": null, "tae": 4.02, "maxLtv": 80, "maxYears": 30,
       "bonificaciones": ["Nómina ≥ 2.500 €", "3 recibos", "Tarjeta", "Seguro hogar", "Seguro vida", "75 €/mes a fondo"],
+      "requirements": { "payrollForBonus": 2500 },
       "openingFee": 0, "notes": ""
     },
     {

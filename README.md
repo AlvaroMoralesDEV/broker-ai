@@ -20,6 +20,7 @@ The broker has a face: a little house that follows your cursor, puffs chimney sm
 ![Saved homes: one analysed, one saved as a link only](docs/homes.png)
 
 - **Memory across conversations.** With Claude, the agent keeps short notes on decisions and their reasons ("ruled out that area because of the commute") and starts every new chat with them.
+- **Market mortgages matched to you.** Ask which mortgage suits you: offers are ranked by what you would pay over the whole term, not by the first payment. Each is checked against your loan, income and financing, so offers you cannot get are set apart with the reason, and variable and mixed ones show the payment if the Euribor rises two points next to your maximum payment.
 - **Bank offer comparison.** Enter each offer the banks make you (rate, fixed years, spread, fees, and every linked product with its discount and yearly cost). You get the real cost over the whole term, whether each linked product pays for itself, and the cheapest way to take each offer.
 - **Several users.** Each person has their own profile, conversations, homes and offers. You can have two people open at once, one per browser tab.
 - **MCP server** exposing the same tools to Claude Desktop or Claude Code.
@@ -103,6 +104,7 @@ Each decision below solves a specific problem. [`docs/agent-design.md`](docs/age
 | **Per-user isolation through `AsyncLocalStorage`.** Every store function filters by `currentUser()`; tests check isolation. | Several people can share one installation without passing a user id through every function, and a forgotten filter fails a test. |
 | **Postgres in Docker, PGlite for `npm run dev`.** Plain SQL migrations applied at startup. | Real Postgres (with pgvector for later) in the packaged app, zero setup for development, and schema changes that are reviewable SQL. |
 | **Web search limited to portals and official sources.** | Unrestricted search returns blogs that the model cites with the same confidence as the INE. |
+| **Market offers are ranked by total cost and checked against the user in code** (`rankOffers()` in `shared/finance.ts`), with requirements stored as data. | The lowest first payment is usually a variable rate that rises after a year, and the cheapest offer on paper is useless if it needs a payroll the user does not have. |
 | **Market rates in a hand-edited file**, with a warning after 30 days. | The only sources are comparison blogs; scraping them would be fragile and against the project's no-scraping rule. A visible age is better than a silent stale number. |
 | **Runs on `127.0.0.1` only, no accounts.** | It holds personal financial data and is meant for one household's computer. Nothing leaves the machine except Claude API calls when a key is set. |
 | **Unit tests never call a model; evals do.** | `npm test` is free, fast and deterministic. `npm run eval` checks real model behaviour (what was stored, which tools ran) after prompt or model changes. |
@@ -172,7 +174,27 @@ npm run eval                     # scripted conversations against the real Claud
 
 [`docs/agent-design.md`](docs/agent-design.md) explains how each request to Claude is built (prompt caching, context snapshots, tool ordering, long conversations) and why. Set `BROKER_LOG_USAGE=1` to print token and cache usage for every model call.
 
-Bank rates and the Euribor live in `data/rates.json` (mounted in Docker, so edit and reload). Schema changes go in `server/migrations/`, and migrations run at startup.
+Schema changes go in `server/migrations/`, and migrations run at startup.
+
+## Updating the bank rates
+
+Market offers and the Euribor live in one hand-edited file, `data/rates.json`. The app warns when it is more than 30 days old. To update it:
+
+1. Open the pages listed under `sources` in the file (comparison sites and each bank's own page).
+2. Set `updated` to today (`YYYY-MM-DD`) and update `euribor` (`monthlyAvg`, `month`, `daily`, `dailyDate`).
+3. For each offer, check `tinBonif`, `tinNoBonif`, `tae`, `openingFee` and, for variable and mixed ones, `initialYears` and `diffBonif`. Add or remove offers as banks change them; each needs a unique `id`.
+4. Check the small print in `requirements`, which is what decides whether an offer is shown as available to a user:
+
+   | Field | Meaning |
+   | --- | --- |
+   | `minLoan` | Smallest loan the bank grants |
+   | `minHouseholdIncome` | Net monthly household income the bank demands (`minHouseholdIncomeCivilServant` if it is lower for civil servants) |
+   | `payrollForBonus` | Payroll needed to get the discounted rate; below it the offer is priced at `tinNoBonif` / `diffNoBonif` |
+
+5. Run `npm test`: one test validates the file, so a typo or a missing field fails with the offer's id.
+6. Reload the page. In Docker the file is mounted, and both the agent and the web read it on the fly, so no rebuild is needed.
+
+In Claude Code you can also ask it to do steps 1 to 5 ("update the rates in data/rates.json from its sources") and review the diff.
 
 ## Known limitations
 

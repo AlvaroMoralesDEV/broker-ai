@@ -275,7 +275,24 @@ export interface Offer {
   maxYears: number;
   bonificaciones: string[];
   openingFee: number | null;
+  /** condiciones que se pueden comprobar con los datos del usuario (ver offerFit) */
+  requirements?: OfferRequirements;
   notes: string;
+}
+
+/**
+ * Requisitos de una oferta de mercado que se pueden cruzar con el perfil. Todos son opcionales y salen
+ * de la letra pequeña del banco: al actualizar data/rates.json hay que revisarlos igual que el TIN.
+ */
+export interface OfferRequirements {
+  /** importe mínimo del préstamo */
+  minLoan?: number;
+  /** ingresos netos mensuales del hogar que exige el banco para concederla */
+  minHouseholdIncome?: number;
+  /** el mismo mínimo cuando el titular es funcionario, si el banco lo rebaja */
+  minHouseholdIncomeCivilServant?: number;
+  /** nómina mínima para tener el tipo bonificado: sin ella se aplica el tipo sin bonificar */
+  payrollForBonus?: number;
 }
 
 export interface OfferQuote {
@@ -315,6 +332,117 @@ export function quoteOffer(offer: Offer, loan: number, years: number, euriborPct
     noBonifPayment: null,
     ltvAvailable,
   };
+}
+
+// ---------- Qué oferta de mercado le conviene a este usuario ----------
+
+/** Quien pide la hipoteca, con lo justo para saber si una oferta es para él. */
+export interface Applicant {
+  loan: number;
+  years: number;
+  age: number;
+  /** % de financiación que necesita */
+  ltvPct: number;
+  /** ingresos netos mensuales del hogar; null si aún no los ha dado (entonces no se comprueban) */
+  netIncome: number | null;
+  civilServant?: boolean;
+}
+
+/** ok: puede pedirla tal cual · sin-bonificar: puede, pero no llega a la nómina del tipo bonificado · no: no cumple */
+export type OfferFit = "ok" | "sin-bonificar" | "no";
+
+export interface EuriborScenario {
+  /** cuota cuando acaba el periodo inicial */
+  payment: number;
+  totalCost: number;
+}
+
+export interface RankedOffer {
+  offer: Offer;
+  fit: OfferFit;
+  /** por qué no encaja o qué condición no cumple, en frases para el usuario */
+  reasons: string[];
+  /** cuota, plazo e intereses con el tipo que de verdad le aplicarían */
+  quote: OfferQuote;
+  /** tipo del periodo inicial que se ha usado en el cálculo */
+  ratePct: number;
+  /** true si no cumple la bonificación y el banco no publica el tipo sin bonificar: el coste real será mayor */
+  costUnderstated: boolean;
+  /** intereses de todo el plazo + comisión de apertura. No incluye el precio de los seguros vinculados */
+  totalCost: number;
+  /** variable y mixta: qué pasa si el euríbor sube 1 o 2 puntos. null en las fijas */
+  stress: { plus1: EuriborScenario; plus2: EuriborScenario } | null;
+}
+
+const money = (n: number) => `${Math.round(n).toLocaleString("es-ES", { useGrouping: "always" })} €`;
+
+/** Comprueba una oferta contra quien la pide y la calcula con el tipo que le aplicarían. */
+export function fitOffer(offer: Offer, who: Applicant, euriborPct: number): RankedOffer {
+  const req = offer.requirements ?? {};
+  const reasons: string[] = [];
+  let fit: OfferFit = "ok";
+
+  const ltvAvailable = offer.youngLtv && who.age <= offer.youngLtv.maxAge ? offer.youngLtv.ltv : offer.maxLtv;
+  if (who.ltvPct > ltvAvailable) {
+    fit = "no";
+    reasons.push(`Financia hasta el ${ltvAvailable} % y tú necesitas el ${who.ltvPct} %.`);
+  }
+  if (req.minLoan != null && who.loan < req.minLoan) {
+    fit = "no";
+    reasons.push(`El préstamo mínimo es de ${money(req.minLoan)} y tú pedirías ${money(who.loan)}.`);
+  }
+  const minIncome = who.civilServant && req.minHouseholdIncomeCivilServant != null ? req.minHouseholdIncomeCivilServant : req.minHouseholdIncome;
+  if (minIncome != null && who.netIncome != null && who.netIncome < minIncome) {
+    fit = "no";
+    reasons.push(`Exige ingresos netos del hogar de ${money(minIncome)}/mes y los tuyos son ${money(who.netIncome)}.`);
+  }
+
+  // No llega a la nómina de la bonificación: se calcula con el tipo sin bonificar (si el banco lo publica).
+  let priced = offer;
+  let costUnderstated = false;
+  if (req.payrollForBonus != null && who.netIncome != null && who.netIncome < req.payrollForBonus) {
+    const excluded = fit === "no";
+    if (fit === "ok") fit = "sin-bonificar";
+    const published = offer.type === "fija" ? offer.tinNoBonif != null : offer.tinNoBonif != null || offer.diffNoBonif != null;
+    costUnderstated = !published;
+    priced = { ...offer, tinBonif: offer.tinNoBonif ?? offer.tinBonif, diffBonif: offer.diffNoBonif ?? offer.diffBonif };
+    if (excluded) reasons.push(`Además pide una nómina de ${money(req.payrollForBonus)} para el tipo bonificado.`);
+    else reasons.push(
+      `Pide una nómina de ${money(req.payrollForBonus)} para el tipo bonificado y tus ingresos son ${money(who.netIncome)}/mes: ${
+        published ? "está calculada con el tipo sin bonificar" : "el banco no publica cuánto sube sin ella, así que te saldrá más cara que esta cifra"
+      }.`,
+    );
+  }
+
+  const fee = offer.openingFee ?? 0;
+  const quote = quoteOffer(priced, who.loan, who.years, euriborPct, who.age);
+  const scenario = (extra: number): EuriborScenario => {
+    const q = quoteOffer(priced, who.loan, who.years, euriborPct + extra, who.age);
+    return { payment: q.laterPayment ?? q.initialPayment, totalCost: q.totalInterest + fee };
+  };
+  return {
+    offer,
+    fit,
+    reasons,
+    quote,
+    ratePct: priced.tinBonif,
+    costUnderstated,
+    totalCost: quote.totalInterest + fee,
+    stress: offer.type === "fija" || quote.laterPayment == null ? null : { plus1: scenario(1), plus2: scenario(2) },
+  };
+}
+
+const FIT_ORDER: Record<OfferFit, number> = { ok: 0, "sin-bonificar": 1, no: 2 };
+
+/**
+ * Ofertas ordenadas para este usuario: primero las que puede pedir, luego las que pagaría sin bonificar y
+ * al final las que no cumple; dentro de cada grupo, por coste total (no por la cuota inicial, que en una
+ * variable o mixta solo vale para los primeros años).
+ */
+export function rankOffers(offers: Offer[], who: Applicant, euriborPct: number): RankedOffer[] {
+  return offers
+    .map((o) => fitOffer(o, who, euriborPct))
+    .sort((a, b) => FIT_ORDER[a.fit] - FIT_ORDER[b.fit] || Number(a.costUnderstated) - Number(b.costUnderstated) || a.totalCost - b.totalCost);
 }
 
 // ---------- Bonificaciones ----------

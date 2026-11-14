@@ -11,7 +11,17 @@ export interface Rates {
   offers: Offer[];
 }
 
+/** Copia incluida al compilar; refreshRates() la sustituye por la del servidor (data/rates.json de hoy). */
 export const RATES = ratesJson as Rates;
+
+export async function refreshRates(): Promise<void> {
+  try {
+    const r = await fetch("/api/rates");
+    if (r.ok) Object.assign(RATES, (await r.json()) as Rates);
+  } catch {
+    // sin servidor se usan los tipos con los que se compiló la web
+  }
+}
 
 export const eur = (n: number) => `${Math.round(n).toLocaleString("es-ES", { useGrouping: "always" })} €`;
 export const pct = (n: number, d = 2) => `${n.toLocaleString("es-ES", { minimumFractionDigits: d, maximumFractionDigits: d })} %`;

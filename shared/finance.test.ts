@@ -1,7 +1,7 @@
 // Comprueba que el motor da los mismos números que el Excel original.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_PROFILE, affordability, analyzePurchase, bonification, pmt, principalFromPayment, schedule } from "./finance.ts";
+import { DEFAULT_PROFILE, affordability, analyzePurchase, bonification, fitOffer, pmt, principalFromPayment, rankOffers, schedule, type Applicant, type Offer } from "./finance.ts";
 import { purchaseTax } from "./taxes.ts";
 
 const near = (a: number, b: number, eps = 0.01) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
@@ -95,4 +95,66 @@ test("amortización anticipada", async () => {
   const plazo2 = earlyRepayment({ ...base, lumpSum: 20000, lumpYear: 3, mode: "plazo" });
   assert.ok(plazo2.interestSaved > cuota.interestSaved);
   near(cuota.totalExtra, 20000);
+});
+
+// ---------- ofertas de mercado cruzadas con el usuario ----------
+
+const FIJA: Offer = {
+  id: "a-fija", bank: "A", product: "Fija", type: "fija", channel: "Oficina", tinBonif: 2.5, tinNoBonif: 3.5, tae: 3,
+  maxLtv: 80, maxYears: 30, bonificaciones: [], openingFee: 0, notes: "",
+};
+const VARIABLE: Offer = {
+  id: "b-var", bank: "B", product: "Variable", type: "variable", channel: "Oficina", tinBonif: 1.5, tinNoBonif: null, initialYears: 1, diffBonif: 0.5,
+  diffNoBonif: null, tae: 4, maxLtv: 80, maxYears: 30, bonificaciones: [], openingFee: 0, notes: "",
+};
+const WHO: Applicant = { loan: 150000, years: 30, age: 30, ltvPct: 80, netIncome: 1800 };
+
+test("fitOffer: requisitos que no cumple (préstamo mínimo, ingresos, financiación)", () => {
+  assert.equal(fitOffer(FIJA, WHO, 3).fit, "ok");
+  const minLoan = fitOffer({ ...FIJA, requirements: { minLoan: 200000 } }, WHO, 3);
+  assert.equal(minLoan.fit, "no");
+  assert.match(minLoan.reasons[0], /préstamo mínimo es de 200\.000 €/);
+  const income = { ...FIJA, requirements: { minHouseholdIncome: 4000, minHouseholdIncomeCivilServant: 1500 } };
+  assert.equal(fitOffer(income, WHO, 3).fit, "no");
+  assert.equal(fitOffer(income, { ...WHO, civilServant: true }, 3).fit, "ok");
+  assert.equal(fitOffer(income, { ...WHO, netIncome: null }, 3).fit, "ok", "sin datos de ingresos no se descarta");
+  assert.equal(fitOffer(FIJA, { ...WHO, ltvPct: 90 }, 3).fit, "no");
+  assert.equal(fitOffer({ ...FIJA, youngLtv: { ltv: 95, maxAge: 35 } }, { ...WHO, ltvPct: 90 }, 3).fit, "ok");
+});
+
+test("fitOffer: sin la nómina de la bonificación se calcula con el tipo sin bonificar", () => {
+  const offer = { ...FIJA, requirements: { payrollForBonus: 2500 } };
+  const r = fitOffer(offer, WHO, 3);
+  assert.equal(r.fit, "sin-bonificar");
+  assert.equal(r.ratePct, 3.5);
+  assert.equal(r.costUnderstated, false);
+  assert.ok(r.totalCost > fitOffer(FIJA, WHO, 3).totalCost);
+  assert.equal(fitOffer(offer, { ...WHO, netIncome: 2600 }, 3).fit, "ok");
+  // el banco no publica el tipo sin bonificar: se avisa de que saldrá más cara
+  const hidden = fitOffer({ ...VARIABLE, requirements: { payrollForBonus: 2500 } }, WHO, 3);
+  assert.equal(hidden.costUnderstated, true);
+  assert.match(hidden.reasons[0], /más cara/);
+});
+
+test("fitOffer: el coste total incluye la apertura, y variables y mixtas llevan el escenario de euríbor", () => {
+  const base = fitOffer(FIJA, WHO, 3);
+  assert.equal(base.stress, null);
+  assert.equal(Math.round(fitOffer({ ...FIJA, openingFee: 500 }, WHO, 3).totalCost - base.totalCost), 500);
+  const v = fitOffer(VARIABLE, WHO, 3);
+  assert.ok(v.stress);
+  assert.ok(v.stress.plus1.payment > v.quote.laterPayment!);
+  assert.ok(v.stress.plus2.payment > v.stress.plus1.payment);
+  assert.ok(v.stress.plus2.totalCost > v.stress.plus1.totalCost && v.stress.plus1.totalCost > v.totalCost);
+});
+
+test("rankOffers: primero las que puede pedir, por coste total y no por cuota inicial", () => {
+  const cara = { ...FIJA, id: "cara", tinBonif: 3.2 };
+  const noCumple = { ...FIJA, id: "no", tinBonif: 1, requirements: { minLoan: 500000 } };
+  const sinNomina = { ...FIJA, id: "sin", tinBonif: 1.2, requirements: { payrollForBonus: 5000 } };
+  const ids = rankOffers([noCumple, cara, sinNomina, FIJA], WHO, 3).map((r) => r.offer.id);
+  assert.deepEqual(ids, ["a-fija", "cara", "sin", "no"], "la más barata sobre el papel no sirve si no la puede pedir");
+  // la variable tiene la cuota inicial más baja, pero con el euríbor al 3 % cuesta más en total que la fija
+  const [first] = rankOffers([VARIABLE, FIJA], WHO, 3);
+  assert.ok(fitOffer(VARIABLE, WHO, 3).quote.initialPayment < fitOffer(FIJA, WHO, 3).quote.initialPayment);
+  assert.equal(first.offer.id, "a-fija");
 });

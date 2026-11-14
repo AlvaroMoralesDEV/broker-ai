@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { quoteOffer, type Offer, type Profile } from "../../shared/finance.ts";
+import { rankOffers, type Offer, type Profile } from "../../shared/finance.ts";
 import { RATES, dateEs, eur, pct } from "../lib.ts";
 import { Field, Num, Segmented } from "../ui.tsx";
 
@@ -12,11 +12,12 @@ export function Hipotecas({ profile, update, price }: { profile: Profile; update
 
   const rows = useMemo(
     () =>
-      RATES.offers
-        .filter((o) => o.type === kind)
-        .map((o) => ({ o, q: quoteOffer(o, loan, profile.years, euribor, profile.age) }))
-        .sort((a, b) => a.q.totalInterest - b.q.totalInterest),
-    [kind, loan, profile.years, profile.age, euribor],
+      rankOffers(
+        RATES.offers.filter((o) => o.type === kind),
+        { loan, years: profile.years, age: profile.age, ltvPct: profile.ltvPct, netIncome: profile.netIncome },
+        euribor,
+      ),
+    [kind, loan, profile.years, profile.age, profile.ltvPct, profile.netIncome, euribor],
   );
 
   return (
@@ -26,7 +27,7 @@ export function Hipotecas({ profile, update, price }: { profile: Profile; update
           <div>
             <h2>Ofertas de los bancos</h2>
             <p className="muted">
-              Datos del {dateEs(RATES.updated)}. Tu cuota está calculada para la hipoteca y el plazo de abajo.
+              Datos del {dateEs(RATES.updated)}, ordenadas por lo que pagarías en total: primero las que puedes pedir con tus ingresos y tu financiación.
             </p>
           </div>
           <Segmented<Kind> value={kind} onChange={setKind} options={[["fija", "Fijas"], ["variable", "Variables"], ["mixta", "Mixtas"]]} />
@@ -47,11 +48,12 @@ export function Hipotecas({ profile, update, price }: { profile: Profile; update
       </section>
 
       <div className="offers">
-        {rows.map(({ o, q }, i) => {
-          const active = kind === "fija" && Math.abs(profile.ratePct - o.tinBonif) < 0.001;
-          const needsMoreLtv = profile.ltvPct > q.ltvAvailable;
+        {rows.map((r, i) => {
+          const { offer: o, quote: q } = r;
+          const active = kind === "fija" && Math.abs(profile.ratePct - r.ratePct) < 0.001;
+          const best = i === 0 && r.fit === "ok";
           return (
-            <article key={o.id} className={`panel offer ${i === 0 ? "best" : ""}`}>
+            <article key={o.id} className={`panel offer fit-${r.fit} ${best ? "best" : ""}`}>
               <div className="offer-main">
                 <div>
                   <h3>
@@ -60,13 +62,13 @@ export function Hipotecas({ profile, update, price }: { profile: Profile; update
                   <p className="muted">
                     {o.channel} · hasta {q.ltvAvailable} % · máx. {o.maxYears} años
                     {q.years < profile.years ? ` (calculado a ${q.years})` : ""}
-                    {i === 0 ? " · La que menos intereses paga" : ""}
+                    {best ? " · La más barata en total para ti" : ""}
                   </p>
                 </div>
                 <div className="offer-rate">
-                  <strong>{pct(o.tinBonif)}</strong>
+                  <strong>{pct(r.ratePct)}</strong>
                   <span className="muted">
-                    {kind === "fija" ? "TIN bonificado" : `${o.initialYears === 1 ? "primer año" : `${o.initialYears} primeros años`}, luego E + ${pct(o.diffBonif ?? 0)}`}
+                    {kind === "fija" ? (r.ratePct === o.tinBonif ? "TIN bonificado" : "TIN sin bonificar") : `${o.initialYears === 1 ? "primer año" : `${o.initialYears} primeros años`}, luego E + ${pct(o.diffBonif ?? 0)}`}
                   </span>
                 </div>
                 <div className="offer-rate">
@@ -78,9 +80,15 @@ export function Hipotecas({ profile, update, price }: { profile: Profile; update
               </div>
               <dl className="mini">
                 <div>
-                  <dt>Intereses totales</dt>
-                  <dd>{eur(q.totalInterest)}</dd>
+                  <dt>Coste total (intereses + apertura)</dt>
+                  <dd>{eur(r.totalCost)}</dd>
                 </div>
+                {r.stress && (
+                  <div>
+                    <dt>Si el euríbor sube 2 puntos</dt>
+                    <dd>{eur(r.stress.plus2.payment)}/mes</dd>
+                  </div>
+                )}
                 <div>
                   <dt>Sin bonificar</dt>
                   <dd>{q.noBonifPayment != null && o.tinNoBonif != null ? `${pct(o.tinNoBonif)} · ${eur(q.noBonifPayment)}/mes` : "No publicado"}</dd>
@@ -100,10 +108,15 @@ export function Hipotecas({ profile, update, price }: { profile: Profile; update
                 {o.bonificaciones.length === 0 ? <span className="chip good">Sin vinculaciones</span> : o.bonificaciones.map((b) => <span key={b} className="chip">{b}</span>)}
               </p>
               {o.notes && <p className="muted small">{o.notes}</p>}
-              {needsMoreLtv && <p className="note warn">Estás simulando un {profile.ltvPct} % de financiación y esta oferta llega al {q.ltvAvailable} %.</p>}
-              {kind === "fija" && (
-                <button className={active ? "" : "ghost"} onClick={() => update({ ratePct: o.tinBonif })} disabled={active}>
-                  {active ? "Tipo en uso en tu simulación" : `Simular con el ${pct(o.tinBonif)}`}
+              {r.reasons.length > 0 && (
+                <p className={`note ${r.fit === "no" ? "bad" : "warn"}`}>
+                  <strong>{r.fit === "no" ? "No encaja contigo. " : "Sin el tipo bonificado. "}</strong>
+                  {r.reasons.join(" ")}
+                </p>
+              )}
+              {kind === "fija" && r.fit !== "no" && (
+                <button className={active ? "" : "ghost"} onClick={() => update({ ratePct: r.ratePct })} disabled={active}>
+                  {active ? "Tipo en uso en tu simulación" : `Simular con el ${pct(r.ratePct)}`}
                 </button>
               )}
             </article>

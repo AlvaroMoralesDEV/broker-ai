@@ -2,7 +2,7 @@
 // Regla: los números salen siempre de aquí (shared/finance.ts), nunca de la cabeza del modelo.
 import { readFileSync } from "node:fs";
 import { z } from "zod";
-import { affordability, analyzePurchase, maxTermYears, quoteOffer, type Offer, type Profile } from "../shared/finance.ts";
+import { affordability, analyzePurchase, maxTermYears, rankOffers, type Offer, type Profile } from "../shared/finance.ts";
 import {
   CONTRACT_TYPES,
   HOME_STATUSES,
@@ -471,7 +471,7 @@ export const TOOLS = {
 
   mortgage_offers: {
     description:
-      "Lista ofertas de hipotecas de bancos españoles (fijas, variables y mixtas) con TIN, TAE, bonificaciones y la cuota que le quedaría al usuario. Incluye el euríbor y la fecha de los datos.",
+      "Ofertas de hipotecas de bancos españoles (fijas, variables y mixtas) ya cruzadas con el usuario y ordenadas: primero las que puede pedir, por coste total. Cada una dice si encaja ('encaje' y 'motivos': préstamo mínimo, ingresos, nómina para el tipo bonificado, financiación), la cuota, el coste total (intereses + apertura, sin seguros vinculados) y, en variables y mixtas, la cuota y el coste si el euríbor sube 1 o 2 puntos. Recomienda por coste total y encaje, no por la cuota inicial; no recomiendes una con encaje 'no'. Incluye el euríbor y la fecha de los datos.",
     schema: z.object({
       type: z.enum(["fija", "variable", "mixta"]).optional(),
       loan: z.number().min(1000).optional().describe("Importe de la hipoteca. Por defecto, la hipoteca máxima del usuario."),
@@ -489,11 +489,21 @@ export const TOOLS = {
         euribor: rates.euribor,
         hipoteca: loan,
         plazo_anos: years,
-        ofertas: rates.offers
-          .filter((o) => !input.type || o.type === input.type)
-          .map((o) => {
-            const q = quoteOffer(o, loan, years, rates.euribor.monthlyAvg, p.age);
+        cuota_maxima_del_usuario: r0(affordability(p).maxPayment),
+        ofertas: rankOffers(
+          rates.offers.filter((o) => !input.type || o.type === input.type),
+          { loan, years, age: p.age, ltvPct: p.ltvPct, netIncome: ctx.me.known ? p.netIncome : null, civilServant: ctx.me.extra.contractType === "funcionario" },
+          rates.euribor.monthlyAvg,
+        ).map((r) => {
+            const { offer: o, quote: q } = r;
             return {
+              encaje: r.fit,
+              motivos: r.reasons,
+              tipo_aplicado_pct: r.ratePct,
+              coste_total: r0(r.totalCost),
+              coste_real_mayor_que_el_calculado: r.costUnderstated || undefined,
+              si_euribor_sube_1_punto: r.stress ? { cuota: r0(r.stress.plus1.payment), coste_total: r0(r.stress.plus1.totalCost) } : null,
+              si_euribor_sube_2_puntos: r.stress ? { cuota: r0(r.stress.plus2.payment), coste_total: r0(r.stress.plus2.totalCost) } : null,
               banco: o.bank,
               producto: o.product,
               tipo: o.type,

@@ -357,3 +357,26 @@ test("update_profile: un cambio de ahorros se suma o resta en código, y un tota
     assert.equal((await store.getProfile()).profile.savings, 10000);
   });
 });
+
+test("data/rates.json tiene el formato que espera la aplicación (se edita a mano)", () => {
+  const rates = loadRates();
+  assert.match(rates.updated, /^\d{4}-\d{2}-\d{2}$/, "updated: fecha AAAA-MM-DD");
+  assert.ok(Number.isFinite(rates.euribor.monthlyAvg) && rates.euribor.month, "euribor.monthlyAvg y euribor.month");
+  assert.ok(rates.offers.length > 0);
+  const ids = new Set<string>();
+  const num = (v: unknown) => typeof v === "number" && Number.isFinite(v);
+  for (const o of rates.offers) {
+    const where = `oferta ${o.id}`;
+    assert.ok(o.id && !ids.has(o.id), `${where}: id repetido o vacío`);
+    ids.add(o.id);
+    assert.ok(o.bank && o.product, `${where}: bank y product`);
+    assert.ok(["fija", "variable", "mixta"].includes(o.type), `${where}: type`);
+    assert.ok(num(o.tinBonif) && o.tinBonif > 0 && o.tinBonif < 15, `${where}: tinBonif en %, p. ej. 2.75`);
+    assert.ok(o.tinNoBonif === null || (num(o.tinNoBonif) && o.tinNoBonif >= o.tinBonif), `${where}: tinNoBonif es null o mayor que tinBonif`);
+    assert.ok(num(o.maxLtv) && num(o.maxYears) && Array.isArray(o.bonificaciones) && typeof o.notes === "string", where);
+    assert.ok(o.openingFee === null || num(o.openingFee), `${where}: openingFee es un número o null`);
+    if (o.type !== "fija") assert.ok(num(o.initialYears) && num(o.diffBonif), `${where}: variable y mixta necesitan initialYears y diffBonif`);
+    const known = ["minLoan", "minHouseholdIncome", "minHouseholdIncomeCivilServant", "payrollForBonus"];
+    for (const [k, v] of Object.entries(o.requirements ?? {})) assert.ok(known.includes(k) && num(v), `${where}: requisito desconocido o no numérico: ${k}`);
+  }
+});
