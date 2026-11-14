@@ -1,7 +1,8 @@
 // Servidor MCP (stdio): las mismas herramientas del agente bróker para Claude Desktop, Claude Code
 // u otro cliente MCP. Lee y escribe en la misma base de datos que la web.
 //
-//   claude mcp add broker -e DATABASE_URL=postgres://broker:broker@localhost:5433/broker -- npx tsx <ruta>/server/mcp.ts
+//   claude mcp add broker -e DATABASE_URL=postgres://broker:broker@localhost:5433/broker -- node <ruta>/server/mcp.ts
+//   (añade -e BROKER_USER=<id> para actuar como otro usuario)
 //
 // Con Docker (docker compose up db) usa DATABASE_URL. Sin DATABASE_URL abre la base de datos embebida
 // (data/pglite), que solo admite un proceso: no lo arranques a la vez que `npm run dev`.

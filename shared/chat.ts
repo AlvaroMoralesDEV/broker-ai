@@ -45,5 +45,8 @@ export const TOOL_LABEL: Record<string, string> = {
   update_home: "Actualizando la vivienda",
   remove_home: "Borrando la vivienda",
   mortgage_offers: "Comparando hipotecas",
+  save_bank_offer: "Apuntando la oferta",
+  compare_bank_offers: "Comparando tus ofertas",
+  remove_bank_offer: "Borrando la oferta",
   web_search: "Buscando en la web",
 };

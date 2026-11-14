@@ -1,6 +1,7 @@
 // Tests del agente sin llamar al modelo: base de datos en memoria (PGlite) y las herramientas directamente.
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
+import { withUser } from "./context.ts";
 import { openDb, setDb, type Db } from "./db.ts";
 import * as store from "./store.ts";
 import { makeContext, runTool } from "./tools.ts";
@@ -136,13 +137,48 @@ test("conversaciones: el historial se guarda tal cual y se agrupa para pintarlo"
   assert.equal((await store.listConversations())[0].id, id);
 });
 
-test("el perfil de ejemplo antiguo no se importa como si fueran datos reales", async () => {
-  const fresh = await openDb("memory://");
-  setDb(fresh);
-  try {
-    assert.equal(await store.importLegacyProfile(new URL("../data/profile.json", import.meta.url)), false);
-  } finally {
-    setDb(db);
-    await fresh.close();
-  }
+test("cada usuario ve solo sus datos", async () => {
+  const ana = await store.createUser("Ana");
+  const mine = (await store.listHomes({ includeDiscarded: true })).length;
+
+  await withUser(ana.id, async () => {
+    assert.equal((await store.getProfile()).known, false, "Ana empieza de cero");
+    assert.equal((await store.listHomes({ includeDiscarded: true })).length, 0);
+    assert.equal((await store.listConversations()).length, 0);
+    // el mismo anuncio puede estar guardado por dos usuarios
+    await runTool("save_home", PISO, await makeContext("chat"));
+    await runTool("update_profile", { note: "tengo 10.000", savings: 10000 }, await makeContext("chat"));
+  });
+
+  assert.equal((await store.listHomes({ includeDiscarded: true })).length, mine, "lo de Ana no aparece en el usuario principal");
+  assert.notEqual((await store.getProfile()).profile.savings, 10000);
+  const someoneElses = (await store.listConversations())[0].id;
+  await withUser(ana.id, async () => {
+    assert.equal(await store.conversationExists(someoneElses), false);
+    assert.deepEqual(await store.getMessages(someoneElses), []);
+    await store.appendMessage(someoneElses, { role: "user", content: "intruso" });
+  });
+  assert.ok(!(await store.getMessages(someoneElses)).some((m) => m.content === "intruso"), "no puede escribir en conversaciones ajenas");
+
+  await store.deleteUser(ana.id);
+  assert.ok(!(await store.listUsers()).some((u) => u.id === ana.id));
+});
+
+test("ofertas de bancos: guardar, comparar y borrar", async () => {
+  const ctx = await makeContext("chat");
+  await runTool("save_bank_offer", { bank: "Banco A", type: "fija", tinPct: 2.3, bonuses: [{ name: "Seguro de vida", discountPct: 0.25, costPerYear: 1200 }] }, ctx);
+  const b = (await runTool("save_bank_offer", { bank: "Banco B", type: "fija", tinPct: 2.45, bonuses: [{ name: "Nómina", discountPct: 0.2, costPerYear: 0 }] }, ctx)) as {
+    id: string;
+    total_ofertas: number;
+  };
+  assert.equal(b.total_ofertas, 2);
+  const out = (await runTool("compare_bank_offers", { loan: 180000, years: 30 }, ctx)) as {
+    ofertas: { banco: string; contratar_solo: string[]; vinculaciones: { compensa: boolean }[] }[];
+  };
+  assert.equal(out.ofertas.length, 2);
+  const a = out.ofertas.find((o) => o.banco === "Banco A")!;
+  assert.deepEqual(a.contratar_solo, [], "un seguro de 1.200 €/año no compensa 0,25 puntos");
+  assert.equal(out.ofertas.find((o) => o.banco === "Banco B")!.vinculaciones[0].compensa, true);
+  await runTool("remove_bank_offer", { id: b.id }, ctx);
+  assert.equal((await store.listOffers()).length, 1);
 });

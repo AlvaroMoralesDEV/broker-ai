@@ -7,7 +7,7 @@ import type { ChatEvent } from "../shared/chat.ts";
 import { extractAnswer, extractFacts, looksLikeListing, norm, numbersIn, parseListingText, parseNumberEs } from "../shared/extract.ts";
 import { ollama, type ProviderInfo } from "./provider.ts";
 import * as store from "./store.ts";
-import { GLOSSARY, budgetLine, eur, factsSummary, homesSummary, listingSummary, offersSummary } from "./summaries.ts";
+import { GLOSSARY, bankOffersSummary, budgetLine, eur, factsSummary, homesSummary, listingSummary, offersSummary } from "./summaries.ts";
 import { makeContext, runTool, type ToolContext } from "./tools.ts";
 
 type Msg = store.StoredMessage;
@@ -28,6 +28,10 @@ const WANTS_SAVE = /\b(guarda(la|lo|r|me)?|guardala|apunta(la|r)?|anade(la)?|me 
 const ASKS_BUDGET = /cuanto puedo|presupuesto|permitir|hasta cuanto|precio maximo|que puedo comprar/;
 const ASKS_HOMES = /compara|mis viviendas|mis pisos|guardad[ao]s|cual (es|me) (la )?(mejor|conviene)/;
 const ASKS_OFFERS = /(hipoteca|banco|fija|variable|mixta).*(mejor|convien|oferta|ofrece|compar|barat|cual)|(mejor|convien|oferta|ofrece|compar|barat|cual|que banco).*(hipoteca|banco)/;
+/** Las ofertas que le han dado a él (no las de mercado). */
+const MY_OFFERS = /mis ofertas|ofertas que (tengo|me han)|me han (dado|ofrecido|hecho)|oferta(s)? del banco|oferta(s)? de los bancos|\bfein\b|\bfipre\b|compar\w* (las |mis )?ofertas|que oferta (elijo|escojo|me quedo)/;
+/** Pega las condiciones de una oferta: sin Claude no se leen fiablemente, se apuntan en el formulario. */
+const PASTED_OFFER = /(me (ofrece\w*|han ofrecido|dan?)|oferta|banco|santander|bbva|caixa|sabadell|bankinter|ing\b|unicaja|abanca|kutxabank|ibercaja|openbank)[\s\S]*\d+[,.]\d+\s*%/;
 /** Preguntas de explicación ("¿qué es el euríbor?"): van al modelo, no a una calculadora. */
 const EXPLAIN = /^\W*(que es|que son|que significa|que diferencia|cual es la diferencia|como funciona|como se calcula|explica|por que|para que sirve)/;
 /** Un saludo y nada más: se presenta y pregunta en qué ayudar, sin lanzarse a la entrevista. */
@@ -248,6 +252,15 @@ Si quieres que empecemos por tu presupuesto, dime «empezar».`,
       const value = parseNumberEs(price[2] ?? price[3]);
       await call("analyze_purchase", { price: value });
       say(listingSummary(ctx.me, toHomeListing({ title: "Una vivienda", price: value })).split("\n\n**No lo dice")[0].split("\n\n**Pregunta")[0]);
+      handled = true;
+    } else if (PASTED_OFFER.test(t) && !MY_OFFERS.test(t)) {
+      say(
+        "Para comparar esa oferta sin Claude, apúntala en **Ofertas de bancos** (menú de la izquierda): banco, tipo, TIN y cada vinculación con su rebaja y lo que te cuesta al año. Es un minuto, y luego te digo cuál te sale más barata de verdad y qué vinculaciones no te compensan.",
+      );
+      handled = true;
+    } else if (MY_OFFERS.test(t)) {
+      await call("compare_bank_offers", {});
+      say(bankOffersSummary(ctx.me, await store.listOffers()));
       handled = true;
     } else if (ASKS_HOMES.test(t)) {
       await call("list_saved_homes", {});

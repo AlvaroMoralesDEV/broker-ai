@@ -1,78 +1,123 @@
 # Bróker IA
 
-Un agente que hace de bróker hipotecario e inmobiliario personal para comprar vivienda en España.
+**An AI agent that works as your personal mortgage broker for buying a home in Spain.** It runs on your computer with `docker compose`, remembers everything in Postgres, and works with Claude, with a free local model through Ollama, or with no AI at all.
 
-Le cuentas tu situación y la recuerda. Le pegas un anuncio de Idealista (texto o captura) y te dice si puedes comprarlo, cuánto te cuesta de verdad, qué alertas tiene y qué preguntar. Te guarda las viviendas que te interesan y, cuando cambia tu situación, recalcula todas.
+You tell it your situation and it works out how much you can buy. You paste a listing from Idealista and it tells you whether it fits, what it really costs and which red flags it has. You enter the mortgage offers banks give you and it tells you which one is cheapest once insurance and fees are counted, and which linked products aren't worth taking.
 
-## Arrancar
+> The app's interface is in Spanish, since it is built for the Spanish market.
+
+![Chat with the broker](docs/chat.png)
+
+## What it does
+
+- **Interview and memory.** It asks one question at a time (savings, net pay and number of payments, contract, debts, whether you buy alone), saves each answer with its date, and recalculates when something changes ("me han subido el sueldo").
+- **Listing review.** Paste the text of a listing, or a screenshot with Claude. You get the verdict, the savings needed (down payment plus regional taxes and fees), the monthly payment, the monthly cost of owning it, red flags (occupied, bare ownership, special levy, no lift…) with the sentence that triggered each one, and questions for the agency.
+- **Saved homes.** Status, notes and price history, all recalculated with your situation today.
+- **Bank offer comparison.** Enter each offer the banks make you (rate, fixed years, spread, fees, and every linked product with its discount and yearly cost). You get the real cost over the whole term, whether each linked product pays for itself, and the cheapest way to take each offer.
+- **Several users.** Each person has their own profile, conversations, homes and offers. You can have two people open at once, one per browser tab.
+- **MCP server** exposing the same tools to Claude Desktop or Claude Code.
+
+![Comparing the offers banks gave you](docs/offers.png)
+
+## Quick start
 
 ```bash
-docker compose up -d --build  # http://localhost:8787
+git clone <this repo> && cd <repo>
+docker compose up -d --build      # http://localhost:8787
 ```
 
-Sin Docker: `npm install && npm run dev` (web en http://localhost:5173). Usa una base de datos Postgres embebida en `data/pglite`.
+No API key is required. The agent picks the best "brain" available:
 
-No hace falta ninguna clave: el agente elige solo el mejor cerebro disponible.
-
-| Modo | Cuándo | Qué cambia |
+| Mode | When | What changes |
 | --- | --- | --- |
-| **Claude** | Hay `ANTHROPIC_API_KEY` en `.env` | Agente completo: conversa, lee capturas, busca en la web y usa las herramientas él mismo |
-| **IA local** | Sin clave, con [Ollama](https://ollama.com) instalado (`ollama pull qwen3:1.7b`) | Gratis y privado. El trabajo de bróker lo hace el código al instante; el modelo solo responde preguntas libres |
-| **Sin IA** | Ni clave ni Ollama | Todo lo determinista sigue funcionando: entrevista, anuncios pegados, guardar, comparar, hipotecas |
+| **Claude** | `ANTHROPIC_API_KEY` in `.env` (copy `.env.example`) | Full agent: converses, reads screenshots, searches the web and calls the tools itself |
+| **Local AI** | No key, [Ollama](https://ollama.com) installed (`ollama pull qwen3:1.7b`) | Free and private. The broker work is done by code instantly; the model only answers open questions |
+| **No AI** | Neither | Interview, listing review, saving, comparing homes and offers all still work |
 
-### Por qué el modo local no es «Claude pero peor»
+Without Docker: `npm install && npm run dev` (web on http://localhost:5173), using an embedded Postgres in `data/pglite`.
 
-Medido en un portátil sin GPU (i7 de 11ª, 16 GB) con `scripts/bench-local.ts`: `qwen3:4b` no respondió en 5 minutos, y `qwen3:1.7b` elegía bien la herramienta pero rellenaba mal los parámetros (campos inventados, ceros en datos que el usuario no dio). Así que en local el modelo no toca las herramientas:
-
-- `shared/extract.ts` lee con reglas los datos del usuario («tengo 42.000 ahorrados», «1900 en 14 pagas») y los campos de un anuncio pegado. Lo ambiguo (sueldo en bruto, cifra anual) no se guarda: se pregunta.
-- `server/summaries.ts` escribe el veredicto, los costes, las alertas y las preguntas para la agencia. Un anuncio se evalúa en menos de 100 ms.
-- La entrevista la conduce el código (siguiente dato que falta, por orden de impacto).
-- El modelo local responde lo demás con un glosario y tu contexto, y se avisa si da cifras en euros que no salen de tus datos.
-
-Para probar otro modelo en tu máquina: `node scripts/bench-local.ts <modelo>` y luego `OLLAMA_MODEL=<modelo>` en `.env`. Para probar el chat desde la terminal: `node scripts/chat.mjs "hola" "tengo 30.000 ahorrados"`.
-
-## Cómo está hecho
+## How it is built
 
 ```
 docker compose
-├── app   Node 24 + Express: agente, herramientas, API REST + SSE, y la web (React) compilada
-└── db    Postgres 16 + pgvector: perfil, histórico de cambios, conversaciones, viviendas
+├── app   Node 24 + Express: agent, tools, REST + SSE, and the React app
+└── db    Postgres 16 (+ pgvector, reserved for the knowledge base)
 ```
 
-- **El modelo extrae y conversa; el código decide.** Claude lee el anuncio y rellena los campos. Los números (cuota, impuestos por comunidad, presupuesto) salen de `shared/finance.ts`, que está testeado contra el Excel original. Las alertas (ocupada, nuda propiedad, derrama, sin ascensor…) son reglas en `shared/broker.ts`, y cada una muestra el trozo del anuncio que la ha hecho saltar.
-- **Memoria en la base de datos.** El perfil tiene un histórico solo de añadir (`profile_facts`: qué dijiste, cuándo y por dónde). Las conversaciones se guardan exactamente como se envían a la API y nunca se editan.
-- **Un solo registro de herramientas** (`server/tools.ts`) para el chat de la web, el modo local y el servidor MCP. El historial tiene el mismo formato en los tres modos, así que una conversación empezada en local se puede continuar con Claude.
-- **Interfaz centrada en el chat:** conversaciones a la izquierda, chat en el centro y, a la derecha, tu presupuesto, lo que el bróker sabe de ti (con lo que falta) y tus viviendas, todo actualizado en vivo. En móvil los paneles son cajones.
+- **The model reads and talks; code decides.** Every figure comes from `shared/finance.ts`, which is tested against the original spreadsheet. Red flags and offer maths are plain, tested rules, so every result can be explained.
+- **One tool registry** (`server/tools.ts`) serves the Claude agent, the local mode and the MCP server. Conversations are stored in the same format in every mode, so a chat started locally can continue with Claude.
+- **Per-user isolation.** Every request runs with its user (`AsyncLocalStorage`), and every query filters by it. Tests check that one user can neither read nor write another's data.
 
-| Herramienta | Qué hace |
-| --- | --- |
-| `get_profile` / `update_profile` | Lo que sabe de ti y lo que le cuentas (sueldo por nómina y pagas, contrato, ahorros…), con el presupuesto antes y después |
-| `evaluate_listing` | Anuncio pegado → veredicto, coste real, coste mensual de tenerla, alertas |
-| `save_home` / `list_saved_homes` / `update_home` / `remove_home` | Viviendas en seguimiento: estado, notas, cambios de precio y veredicto recalculado |
-| `max_budget` / `analyze_purchase` / `mortgage_offers` | Presupuesto, simulación a un precio y ofertas de bancos |
-| `web_search` | Precios por zona y novedades (herramienta del servidor de Anthropic) |
+### Why local mode is not "Claude, but worse"
 
-## Servidor MCP
+Measured on a laptop without a GPU (11th-gen i7, 16 GB) with `scripts/bench-local.ts`: `qwen3:4b` did not answer in 5 minutes, and `qwen3:1.7b` chose the right tool but filled its arguments badly (invented fields, zeros for data the user never gave). So in local mode the model never calls tools:
 
-Las mismas herramientas desde Claude Desktop o Claude Code, sobre la misma base de datos:
+- `shared/extract.ts` reads the user's facts and the fields of a pasted listing with rules. Anything ambiguous (gross or yearly pay) is asked about, not saved.
+- `server/summaries.ts` writes the verdict, costs, red flags and offer comparison. A listing is evaluated in under 100 ms.
+- The local model answers everything else using a glossary and the user's context, and the app flags any euro figure it gives that does not come from the user's data.
+
+## Inspecting the data
+
+Everything is stored in Postgres inside the `db` container:
 
 ```bash
-claude mcp add broker -e DATABASE_URL=postgres://broker:broker@localhost:5433/broker -- node <ruta-al-proyecto>/server/mcp.ts
+# open a SQL console (the user is "broker", not "postgres")
+docker exec -it broker-ia-db-1 psql -U broker -d broker
 ```
 
-Requiere `docker compose up -d db`. Sin `DATABASE_URL` usa la base de datos embebida, que admite un solo proceso: no la abras a la vez desde la web y desde MCP.
+```sql
+\dt                                                      -- list tables
+SELECT id, name FROM users;                              -- users
+SELECT user_id, data, extra FROM profile;                -- current profile of each user
+SELECT user_id, field, new_value, note, created_at
+  FROM profile_facts ORDER BY id DESC LIMIT 20;          -- what each user said, and when
+SELECT user_id, title, updated_at FROM conversations ORDER BY updated_at DESC;
+SELECT user_id, id, title, price, status FROM homes;     -- saved homes
+SELECT user_id, bank, offer FROM bank_offers;            -- offers from banks
+\q                                                       -- exit
+```
 
-## Desarrollo
+| Table | Contents |
+| --- | --- |
+| `users` | People using this installation |
+| `profile` / `profile_facts` | Current situation, plus an append-only log of every change |
+| `conversations` / `messages` | Chats, stored exactly as sent to the model |
+| `homes` / `home_prices` | Saved homes and their price history |
+| `bank_offers` | Mortgage offers received from banks |
 
-- `npm test`: motor de cálculo, alertas y herramientas contra una base de datos en memoria (sin llamar al modelo).
-- `npm run typecheck`
-- Tipos de los bancos: `data/rates.json` (en Docker se monta, así que basta con editarlo y recargar).
-- Migraciones: `server/migrations/*.sql`, que se aplican al arrancar.
+Data lives in the `broker-ia_pgdata` Docker volume and survives restarts. `docker compose down -v` deletes it.
 
-## Límites conocidos
+## MCP server
 
-- No busca anuncios: Idealista no permite el scraping y su API requiere aprobación. Tú buscas y el agente evalúa.
-- Las alertas y la lectura de anuncios son reglas de texto: pueden fallar con redacciones raras (en ambas direcciones). Cada alerta muestra su evidencia para que puedas comprobarla.
-- En modo local no se leen capturas (hay que pegar el texto) y las respuestas a preguntas libres son las de un modelo de 2B: útiles para conceptos, flojas para consejo fino.
-- La lectura de anuncios está probada con el formato de Idealista copiado como texto; otros portales pueden necesitar ajustes en `shared/extract.ts`.
-- Impuestos y reducciones para jóvenes son orientativos y tienen requisitos.
+The same tools, from Claude Desktop or Claude Code, against the same database:
+
+```bash
+docker compose up -d db
+claude mcp add broker -e DATABASE_URL=postgres://broker:broker@localhost:5433/broker -- node <path-to-repo>/server/mcp.ts
+```
+
+Add `-e BROKER_USER=<user id>` to act as a user other than the default one (see `SELECT id, name FROM users`).
+
+## Development
+
+```bash
+npm test                         # engine, extraction, offers, tools, local mode, user isolation (no model calls)
+npm run typecheck
+node scripts/chat.mjs "hola" "tengo 30.000 ahorrados"     # drive the chat from the terminal
+node scripts/bench-local.ts qwen3:1.7b                   # measure a local model on this machine
+```
+
+Bank rates and the Euribor live in `data/rates.json` (mounted in Docker, so edit and reload). Schema changes go in `server/migrations/`, and migrations run at startup.
+
+## Known limitations
+
+- It does not search listings: Idealista forbids scraping and its API needs approval. You search; the agent evaluates.
+- Listing parsing and red flags are text rules tuned to Idealista text copied from the page. Unusual wording can be missed in either direction, so each flag shows its evidence and missing fields are listed.
+- The offer comparison assumes Euribor stays at today's value and that insurance costs the same every year.
+- In local mode screenshots can't be read (paste the text instead), and answers to open questions come from a 2B model: fine for concepts, weak for nuanced advice.
+- Users have no passwords. This is meant to run on your own machine; don't expose it to a network.
+- Figures are guidance, not financial advice. Taxes and youth reductions have conditions, and banks set the real terms.
+
+## Privacy
+
+Everything stays on your computer. The only outside calls are to the Claude API, and only when you add a key. Personal files (`.env`, `data/pglite/`, spreadsheets, database dumps) are listed in `.gitignore`.

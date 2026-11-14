@@ -1,7 +1,26 @@
+# dependencias y compilados
 node_modules
 dist
+
+# secretos
 .env
+.env.*
+!.env.example
+
 # datos personales: nunca al repositorio
-data/profile.json
 data/pglite/
+data/profile.json
 *.xlsx
+*.xls
+*.csv
+*.sql.gz
+*.dump
+backups/
+
+# ajustes locales de herramientas
+.claude/settings.local.json
+.vscode/
+.idea/
+*.log
+.DS_Store
+Thumbs.db

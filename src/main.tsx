@@ -1,8 +1,12 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
+import { installUserHeader } from "./lib.ts";
 import "./styles.css";
 import "./broker.css";
+
+// cada llamada a /api lleva el usuario de esta pestaña
+installUserHeader();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

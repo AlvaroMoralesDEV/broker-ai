@@ -177,3 +177,20 @@ test("saludo cuando ya le conoce", async () => {
   assert.match(r.text, /Tengo guardada tu situación/);
   assert.doesNotMatch(r.text, /\?[^?]*\?/, "una sola pregunta");
 });
+
+test("ofertas de bancos en modo local: comparar las apuntadas y guiar al formulario", async () => {
+  const empty = await say("compara mis ofertas");
+  assert.deepEqual(empty.tools, ["compare_bank_offers"]);
+  assert.match(empty.text, /Ofertas de bancos/);
+
+  await store.saveOffer({ bank: "Banco Uno", type: "fija", tinPct: 2.2, bonuses: [{ name: "Seguro de vida", discountPct: 0.25, costPerYear: 1100 }] });
+  await store.saveOffer({ bank: "Banco Dos", type: "fija", tinPct: 2.5, bonuses: [{ name: "Nómina", discountPct: 0.2, costPerYear: 0 }] });
+  const r = await say("¿Qué oferta elijo de las que me han dado?");
+  assert.match(r.text, /2 ofertas/);
+  assert.match(r.text, /Seguro de vida: ahorras .* No compensa/);
+  assert.match(r.text, /La más barata es \*\*/);
+
+  const pasted = await say("El Santander me ofrece una fija al 2,35% con seguro de vida y nómina");
+  assert.deepEqual(pasted.tools, []);
+  assert.match(pasted.text, /apúntala en \*\*Ofertas de bancos\*\*/);
+});

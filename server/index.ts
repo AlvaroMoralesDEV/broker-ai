@@ -3,14 +3,15 @@ import express from "express";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { CONTRACT_TYPES, HOME_STATUSES } from "../shared/broker.ts";
+import { CONTRACT_TYPES, HOME_STATUSES, missingKeyFacts, toHomeListing } from "../shared/broker.ts";
 import type { ChatEvent } from "../shared/chat.ts";
+import { analyzePurchase } from "../shared/finance.ts";
+import { OFFER_TYPES } from "../shared/offers.ts";
 import { CCAA_IDS } from "../shared/taxes.ts";
 import { describeError, runAgent, toDisplay } from "./agent.ts";
-import { resolveProvider } from "./provider.ts";
-import { missingKeyFacts, toHomeListing } from "../shared/broker.ts";
-import { analyzePurchase } from "../shared/finance.ts";
+import { DEFAULT_USER, withUser } from "./context.ts";
 import { getDb } from "./db.ts";
+import { resolveProvider } from "./provider.ts";
 import * as store from "./store.ts";
 import { loadRates } from "./tools.ts";
 
@@ -18,6 +19,17 @@ const app = express();
 // las capturas de anuncios viajan en base64
 app.use(express.json({ limit: "25mb" }));
 
+// Usuario de la petición: cabecera X-Broker-User (la pone la web). Sin login: es una app local.
+app.use("/api", (req, res, next) => {
+  const user = req.get("x-broker-user") || DEFAULT_USER;
+  store
+    .userExists(user)
+    .then((ok) => {
+      if (!ok) return void res.status(404).set("X-Unknown-User", "1").json({ error: "Ese usuario ya no existe." });
+      withUser(user, next);
+    })
+    .catch(next);
+});
 
 const asyncRoute =
   (fn: (req: express.Request, res: express.Response) => Promise<unknown>) => (req: express.Request, res: express.Response) =>
@@ -39,6 +51,64 @@ app.get("/api/status", asyncRoute(async (_req, res) => {
 app.get("/api/rates", (_req, res) => {
   res.json(loadRates());
 });
+
+// ------------------------------------------------------------ usuarios
+
+app.get("/api/users", asyncRoute(async (_req, res) => {
+  res.json(await store.listUsers());
+}));
+
+app.post("/api/users", asyncRoute(async (req, res) => {
+  const parsed = z.object({ name: z.string().trim().min(1).max(40) }).safeParse(req.body);
+  if (!parsed.success) return void res.status(400).json({ error: "Pon un nombre" });
+  res.json(await store.createUser(parsed.data.name));
+}));
+
+app.patch("/api/users/:id", asyncRoute(async (req, res) => {
+  const parsed = z.object({ name: z.string().trim().min(1).max(40) }).safeParse(req.body);
+  if (!parsed.success) return void res.status(400).json({ error: "Pon un nombre" });
+  await store.renameUser(String(req.params.id), parsed.data.name);
+  res.json({ ok: true });
+}));
+
+app.delete("/api/users/:id", asyncRoute(async (req, res) => {
+  const id = String(req.params.id);
+  if (id === DEFAULT_USER) return void res.status(400).json({ error: "El usuario principal no se puede borrar." });
+  await store.deleteUser(id);
+  res.json({ ok: true });
+}));
+
+// ------------------------------------------------------------ ofertas de bancos
+
+const offerSchema = z.object({
+  id: z.string().optional(),
+  bank: z.string().trim().min(1).max(60),
+  type: z.enum(OFFER_TYPES),
+  tinPct: z.number().min(0).max(15),
+  fixedYears: z.number().min(0).max(40).optional(),
+  spreadPct: z.number().min(-1).max(5).optional(),
+  loan: z.number().min(1000).optional(),
+  years: z.number().int().min(1).max(40).optional(),
+  bonuses: z.array(z.object({ name: z.string().trim().min(1).max(60), discountPct: z.number().min(0).max(3), costPerYear: z.number().min(0) })).max(10),
+  openingFee: z.number().min(0).optional(),
+  otherCosts: z.number().min(0).optional(),
+  taePct: z.number().min(0).max(20).optional(),
+  notes: z.string().max(1000).optional(),
+});
+
+app.get("/api/offers", asyncRoute(async (_req, res) => {
+  res.json(await store.listOffers());
+}));
+
+app.post("/api/offers", asyncRoute(async (req, res) => {
+  const parsed = offerSchema.safeParse(req.body);
+  if (!parsed.success) return void res.status(400).json({ error: "Revisa los datos de la oferta" });
+  res.json((await store.saveOffer(parsed.data)).offer);
+}));
+
+app.delete("/api/offers/:id", asyncRoute(async (req, res) => {
+  res.json({ ok: await store.removeOffer(String(req.params.id)) });
+}));
 
 // ------------------------------------------------------------ perfil
 
@@ -184,7 +254,6 @@ if (existsSync(dist)) {
 }
 
 const db = await getDb();
-if (await store.importLegacyProfile(new URL("../data/profile.json", import.meta.url))) console.log("Perfil importado de data/profile.json");
 
 const port = Number(process.env.PORT) || 8787;
 const host = process.env.HOST || "127.0.0.1";

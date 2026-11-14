@@ -3,6 +3,7 @@
 // y sus cifras salen del motor de cálculo.
 import { monthlyOwnership, redFlags, type HomeListing, type RedFlag, type SavedHome } from "../shared/broker.ts";
 import { affordability, analyzePurchase, quoteOffer, type Profile } from "../shared/finance.ts";
+import { compareOffers, offerDefaults, type ReceivedOffer } from "../shared/offers.ts";
 import { ccaaName } from "../shared/taxes.ts";
 import type { StoredProfile } from "./store.ts";
 import { loadRates } from "./tools.ts";
@@ -157,6 +158,43 @@ export function offersSummary(me: StoredProfile, type?: "fija" | "variable" | "m
     lines.push(`- **${o.bank}** · ${o.product} (${o.type}): ${eur(q.initialPayment)}/mes, TIN ${pct(o.tinBonif)} con bonificaciones${o.tae != null ? `, TAE ${pct(o.tae)}` : ""}`);
   }
   lines.push("", `Euríbor de ${rates.euribor.month}: ${pct(rates.euribor.monthlyAvg)}. Son puntos de partida para negociar: la oferta real depende de tu perfil y exige bonificaciones (nómina, seguros).`);
+  return lines.join("\n");
+}
+
+/** Comparativa de las ofertas que le han dado los bancos al usuario. */
+export function bankOffersSummary(me: StoredProfile, offers: ReceivedOffer[]): string {
+  if (!offers.length) {
+    return "Aún no me has pasado ninguna oferta de banco. Apúntalas en **Ofertas de bancos** (menú de la izquierda): banco, tipo, TIN y cada vinculación con lo que te cuesta al año. Con dos o más te digo cuál sale más barata de verdad.";
+  }
+  const rates = loadRates();
+  const ranked = compareOffers(offers, offerDefaults(me.profile), rates.euribor.monthlyAvg);
+  const lines = [
+    offers.length === 1 ? "Con la oferta que tengo apuntada:" : `He comparado tus **${offers.length} ofertas** por lo que te cuestan de verdad en todo el plazo:`,
+    "",
+  ];
+  ranked.forEach((c, i) => {
+    const keepAll = c.keep.length === c.offer.bonuses.length;
+    const advice = !c.offer.bonuses.length
+      ? "sin vinculaciones"
+      : keepAll
+        ? "te compensan todas sus vinculaciones"
+        : c.keep.length
+          ? `contrata solo: ${c.keep.join(", ")}`
+          : "no te compensa ninguna vinculación";
+    lines.push(
+      `- ${i === 0 && ranked.length > 1 ? "🏆 " : ""}**${c.offer.bank}** (${c.offer.type}, ${pct(c.offer.tinPct)}): cuota ${eur(c.payment)}/mes${
+        c.laterPayment ? `, luego ${eur(c.laterPayment)}` : ""
+      } · coste total ${eur(c.bestTotalCost)} · ${advice}`,
+    );
+    for (const b of c.bonuses.filter((x) => !x.worthIt)) {
+      lines.push(`  - ${b.name}: ahorras ${eur(b.interestSaved)} en intereses pero pagas ${eur(b.totalCost)}. No compensa.`);
+    }
+  });
+  if (ranked.length > 1) {
+    const diff = ranked.at(-1)!.bestTotalCost - ranked[0].bestTotalCost;
+    lines.push("", `La más barata es **${ranked[0].offer.bank}**: ${eur(diff)} menos que la más cara en todo el plazo.`);
+  }
+  lines.push("", `_Supuestos: euríbor constante en ${pct(rates.euribor.monthlyAvg)} y seguros con el mismo precio cada año. Usa esto para negociar: enseña a cada banco la mejor oferta._`);
   return lines.join("\n");
 }
 

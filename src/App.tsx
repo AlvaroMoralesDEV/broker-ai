@@ -3,7 +3,8 @@ import { KEY_FACTS, redFlags, type ProfileExtra } from "../shared/broker.ts";
 import { affordability, analyzePurchase, maxTermYears, type Profile } from "../shared/finance.ts";
 import { CCAA_LIST, ccaaName, type CCAA } from "../shared/taxes.ts";
 import { Chat } from "./Chat.tsx";
-import { RATES, dateEs, eur, useHomes, useProfile, useStatus, useStored, type HomesStore, type ProfileState } from "./lib.ts";
+import { RATES, USER, dateEs, eur, switchUser, useHomes, useOffers, useProfile, useStatus, useStored, useUsers, type HomesStore, type ProfileState } from "./lib.ts";
+import { Ofertas } from "./tabs/Ofertas.tsx";
 import { Field, Num, Stat } from "./ui.tsx";
 import { Simulador } from "./tabs/Simulador.tsx";
 import { MisViviendas } from "./tabs/Casas.tsx";
@@ -13,8 +14,8 @@ import { AlquilarComprar } from "./tabs/AlquilarComprar.tsx";
 import { PlanAhorro } from "./tabs/PlanAhorro.tsx";
 import { Amortizar } from "./tabs/Amortizar.tsx";
 
-type View = "chat" | "viviendas" | "calc";
-const VIEWS: View[] = ["chat", "viviendas", "calc"];
+type View = "chat" | "viviendas" | "ofertas" | "calc";
+const VIEWS: View[] = ["chat", "viviendas", "ofertas", "calc"];
 
 const TABS = [
   ["simulador", "Simulador"],
@@ -37,9 +38,12 @@ export function App() {
   const { profile, update } = me;
   const status = useStatus();
   const homes = useHomes();
+  const offers = useOffers();
+  const users = useUsers();
   const [view, setView] = useStored<View>("hs.view", "chat");
   const [tab, setTab] = useStored<Tab>("hs.calc", "simulador");
-  const [conversationId, setConversationId] = useStored<string | null>("hs.conversation", null);
+  // la conversación abierta se recuerda por usuario
+  const [conversationId, setConversationId] = useStored<string | null>(`hs.conversation.${USER}`, null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [drawer, setDrawer] = useState<"nav" | "context" | null>(null);
   const [seed, setSeed] = useState<{ text: string; n: number } | null>(null);
@@ -126,6 +130,7 @@ export function App() {
             <p>Tu bróker hipotecario personal</p>
           </div>
         </div>
+        <UserSwitcher store={users} />
         <button className="new-chat" onClick={() => openConversation(null)}>
           + Nueva conversación
         </button>
@@ -135,6 +140,10 @@ export function App() {
           </button>
           <button className={view === "viviendas" ? "on" : ""} onClick={() => go("viviendas")}>
             <Icon d="M3 11l9-7 9 7M5 10v10h14V10M10 20v-6h4v6" /> Mis viviendas {active.length > 0 && <em>{active.length}</em>}
+          </button>
+          <button className={view === "ofertas" ? "on" : ""} onClick={() => go("ofertas")}>
+            <Icon d="M19 5L5 19M7.5 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM16.5 18a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z" /> Ofertas de bancos{" "}
+            {offers.offers.length > 0 && <em>{offers.offers.length}</em>}
           </button>
           <button className={view === "calc" ? "on" : ""} onClick={() => go("calc")}>
             <Icon d="M6 3h12v18H6zM9 7h6M9 12h.01M12 12h.01M15 12h.01M9 16h.01M12 16h.01M15 16h.01" /> Calculadoras
@@ -180,6 +189,7 @@ export function App() {
               loadConversations();
               me.reload();
               homes.reload();
+              offers.reload();
             }}
             onProfileChanged={me.reload}
             homes={homes}
@@ -187,6 +197,7 @@ export function App() {
             seed={seed}
           />
         )}
+        {view === "ofertas" && <Ofertas profile={profile} store={offers} onAskBroker={ask} />}
         {view === "viviendas" && <MisViviendas profile={profile} store={homes} onSimulate={simulate} onAskBroker={() => openConversation(conversationId)} />}
         {view === "calc" && (
           <div className="page">
@@ -234,6 +245,81 @@ export function App() {
       </main>
 
       {view === "chat" && <Situation me={me} homes={homes} onAsk={ask} onView={go} />}
+    </div>
+  );
+}
+
+/**
+ * Usuario de esta pestaña. Cada usuario tiene su perfil, conversaciones, viviendas y ofertas.
+ * Sin contraseñas: está pensado para usarlo en tu ordenador (tú, tu pareja, alguien a quien asesoras).
+ */
+function UserSwitcher({ store }: { store: ReturnType<typeof useUsers> }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const current = store.current;
+  const label = current?.name ?? "…";
+  const initial = (n: string) => n.trim()[0]?.toUpperCase() ?? "?";
+  const newTab = (id: string) => window.open(`${location.pathname}?u=${encodeURIComponent(id)}`, "_blank", "noopener");
+
+  return (
+    <div className="user-switch">
+      <button className="user-current" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className="user-initial" aria-hidden>
+          {initial(label)}
+        </span>
+        <span className="user-name">{label}</span>
+        <small>{open ? "Cerrar" : "Cambiar"}</small>
+      </button>
+      {open && (
+        <div className="user-menu">
+          <p className="eyebrow">Usuarios</p>
+          {store.users.map((u) => (
+            <div key={u.id} className={`user-row${u.id === USER ? " on" : ""}`}>
+              <button className="user-pick" onClick={() => u.id !== USER && switchUser(u.id)} disabled={u.id === USER}>
+                <span className="user-initial" aria-hidden>
+                  {initial(u.name)}
+                </span>
+                {u.name}
+                {u.id === USER && <small> · aquí</small>}
+              </button>
+              <button className="icon" title={`Abrir a ${u.name} en otra pestaña`} aria-label={`Abrir a ${u.name} en otra pestaña`} onClick={() => newTab(u.id)}>
+                ↗
+              </button>
+            </div>
+          ))}
+          <form
+            className="user-new"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (name.trim()) store.create(name.trim());
+            }}
+          >
+            <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre del nuevo usuario" maxLength={40} aria-label="Nombre del nuevo usuario" />
+            <button type="submit" disabled={!name.trim()}>
+              Crear
+            </button>
+          </form>
+          <div className="row">
+            <button
+              className="link"
+              onClick={() => {
+                const n = prompt("Nuevo nombre", label);
+                if (n?.trim()) store.rename(USER, n.trim());
+              }}
+            >
+              Renombrar
+            </button>
+            {USER !== "default" && (
+              <button
+                className="link danger"
+                onClick={() => confirm(`¿Borrar a ${label} y todos sus datos (perfil, conversaciones, viviendas y ofertas)? No se puede deshacer.`) && store.remove(USER)}
+              >
+                Borrar a {label}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

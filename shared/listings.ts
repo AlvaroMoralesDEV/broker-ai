@@ -23,30 +23,6 @@ export interface Listing {
   source: "idealista" | "ejemplo" | "manual";
 }
 
-export interface SearchParams {
-  zone: string;
-  maxPrice?: number;
-  minPrice?: number;
-  minRooms?: number;
-  minSize?: number;
-  radiusKm?: number;
-  /** price | size | ratio */
-  order?: "price" | "size" | "ratio";
-  page?: number;
-}
-
-export interface SearchResult {
-  source: "idealista" | "ejemplo";
-  zone: string;
-  /** comunidad autónoma detectada para la zona, si se conoce */
-  ccaa: CCAA | null;
-  total: number;
-  listings: Listing[];
-  /** aviso para mostrar al usuario (p. ej. que son datos de ejemplo) */
-  notice: string | null;
-  idealistaSearchUrl: string;
-}
-
 export interface City {
   name: string;
   ccaa: CCAA;
@@ -59,7 +35,7 @@ export interface City {
 
 const c = (name: string, ccaa: CCAA, lat: number, lon: number, m2: number, districts: string[]): City => ({ name, ccaa, lat, lon, m2, districts });
 
-/** Ciudades conocidas: coordenadas para la API de Idealista y base para los datos de ejemplo. */
+/** Ciudades conocidas y sus barrios: sirven para saber de qué comunidad es un anuncio pegado (impuestos). */
 export const CITIES: City[] = [
   c("Madrid", "madrid", 40.4168, -3.7038, 4800, ["Carabanchel", "Vallecas", "Tetuán", "Arganzuela", "Chamberí", "Usera", "Ciudad Lineal", "Latina"]),
   c("Barcelona", "cataluna", 41.3874, 2.1686, 4600, ["Sants", "Gràcia", "Eixample", "Nou Barris", "Sant Andreu", "Horta", "Poblenou"]),
@@ -130,9 +106,4 @@ export function findCity(zone: string): City | null {
     if (city.districts.some((d) => z.includes(` ${normalize(d)} `))) return city;
   }
   return null;
-}
-
-export function idealistaSearchUrl(zone: string): string {
-  const slug = normalize(zone).replace(/ /g, "-") || "espana";
-  return `https://www.idealista.com/buscar/venta-viviendas/${encodeURIComponent(slug)}/`;
 }

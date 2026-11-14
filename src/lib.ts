@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ratesJson from "../data/rates.json";
 import type { HomeStatus, ListingInput, ProfileExtra, SavedHome } from "../shared/broker.ts";
 import { DEFAULT_PROFILE, type Offer, type Profile } from "../shared/finance.ts";
+import type { ReceivedOffer } from "../shared/offers.ts";
 
 export interface Rates {
   updated: string;
@@ -15,6 +16,122 @@ export const RATES = ratesJson as Rates;
 export const eur = (n: number) => `${Math.round(n).toLocaleString("es-ES", { useGrouping: "always" })} €`;
 export const pct = (n: number, d = 2) => `${n.toLocaleString("es-ES", { minimumFractionDigits: d, maximumFractionDigits: d })} %`;
 export const dateEs = (iso: string) => new Date(iso + "T12:00:00").toLocaleDateString("es-ES", { day: "numeric", month: "long", year: "numeric" });
+
+const json = (method: string, body: unknown): RequestInit => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+// ---------------------------------------------------------------- usuario de esta pestaña
+
+function storageGet(store: Storage, key: string): string | null {
+  try {
+    return store.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function storageSet(store: Storage, key: string, value: string) {
+  try {
+    store.setItem(key, value);
+  } catch {
+    // sin almacenamiento: el usuario dura lo que la página
+  }
+}
+
+/**
+ * Usuario de esta pestaña: ?u= en la URL, si no el de esta pestaña (sessionStorage), si no el último
+ * usado (localStorage). Así puedes tener a dos personas abiertas a la vez, una en cada pestaña.
+ */
+export const USER: string = (() => {
+  const u =
+    new URLSearchParams(location.search).get("u") || storageGet(sessionStorage, "hs.user") || storageGet(localStorage, "hs.user") || "default";
+  storageSet(sessionStorage, "hs.user", u);
+  storageSet(localStorage, "hs.user", u);
+  return u;
+})();
+
+/** Cambia de usuario en esta pestaña y recarga para empezar limpio. */
+export function switchUser(id: string) {
+  storageSet(sessionStorage, "hs.user", id);
+  storageSet(localStorage, "hs.user", id);
+  const url = new URL(location.href);
+  url.searchParams.delete("u");
+  url.searchParams.delete("c");
+  location.href = url.toString();
+}
+
+/** Añade el usuario a cada llamada a /api. Si el usuario ya no existe, vuelve al principal. */
+export function installUserHeader() {
+  const original = window.fetch.bind(window);
+  window.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.pathname : input.url;
+    if (!url.startsWith("/api")) return original(input, init);
+    const headers = new Headers(init.headers);
+    headers.set("X-Broker-User", USER);
+    const res = await original(input, { ...init, headers });
+    if (res.headers.get("X-Unknown-User") && USER !== "default") switchUser("default");
+    return res;
+  };
+}
+
+export interface User {
+  id: string;
+  name: string;
+}
+
+export function useUsers() {
+  const [users, setUsers] = useState<User[]>([]);
+  const reload = useCallback(
+    () =>
+      fetch("/api/users")
+        .then((r) => (r.ok ? r.json() : []))
+        .then(setUsers)
+        .catch(() => {}),
+    [],
+  );
+  useEffect(() => {
+    reload();
+  }, [reload]);
+  const create = async (name: string) => {
+    const r = await fetch("/api/users", json("POST", { name }));
+    if (r.ok) switchUser(((await r.json()) as User).id);
+  };
+  const rename = async (id: string, name: string) => {
+    await fetch(`/api/users/${id}`, json("PATCH", { name }));
+    reload();
+  };
+  const remove = async (id: string) => {
+    await fetch(`/api/users/${id}`, { method: "DELETE" });
+    if (id === USER) switchUser("default");
+    else reload();
+  };
+  return { users, current: users.find((u) => u.id === USER) ?? null, create, rename, remove };
+}
+
+/** Ofertas que le han dado los bancos a este usuario. */
+export function useOffers() {
+  const [offers, setOffers] = useState<ReceivedOffer[]>([]);
+  const reload = useCallback(
+    () =>
+      fetch("/api/offers")
+        .then((r) => (r.ok ? r.json() : []))
+        .then(setOffers)
+        .catch(() => {}),
+    [],
+  );
+  useEffect(() => {
+    reload();
+  }, [reload]);
+  const save = async (offer: Omit<ReceivedOffer, "id"> & { id?: string }) => {
+    const r = await fetch("/api/offers", json("POST", offer));
+    if (r.ok) await reload();
+    return r.ok;
+  };
+  const remove = async (id: string) => {
+    await fetch(`/api/offers/${encodeURIComponent(id)}`, { method: "DELETE" });
+    setOffers((list) => list.filter((o) => o.id !== id));
+  };
+  return { offers, reload, save, remove };
+}
+export type OffersStore = ReturnType<typeof useOffers>;
 
 /** useState que se guarda en localStorage. */
 export function useStored<T>(key: string, initial: T | (() => T)) {
@@ -41,7 +158,6 @@ export function useStored<T>(key: string, initial: T | (() => T)) {
   return [value, setValue] as const;
 }
 
-const json = (method: string, body: unknown): RequestInit => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 export interface ProfileState {
   profile: Profile;

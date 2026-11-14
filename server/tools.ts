@@ -17,6 +17,7 @@ import {
   type ProfileExtra,
   type SavedHome,
 } from "../shared/broker.ts";
+import { OFFER_TYPES, compareOffers, offerDefaults, type ReceivedOffer } from "../shared/offers.ts";
 import { CCAA_IDS, ccaaName } from "../shared/taxes.ts";
 import * as store from "./store.ts";
 
@@ -398,6 +399,84 @@ export const TOOLS = {
         fuentes: rates.sources,
       };
     },
+  },
+
+  save_bank_offer: {
+    description:
+      "Guarda una oferta de hipoteca que le ha dado un banco al usuario (de su texto, una captura o una FEIN/FIPRE). Extrae: banco, tipo, TIN bonificado, años fijos y diferencial si es mixta/variable, importe y plazo si aparecen, comisiones, y CADA bonificación con su rebaja en puntos y su coste anual (nómina = 0 €; seguros: pregunta el precio si no viene). Para corregir una oferta guardada, pasa su id.",
+    schema: z.object({
+      id: z.string().optional().describe("id de una oferta guardada para sustituirla"),
+      bank: z.string().min(1),
+      type: z.enum(OFFER_TYPES),
+      tinPct: z.number().min(0).max(15).describe("TIN con todas las bonificaciones (en mixta, el del tramo fijo)"),
+      fixedYears: z.number().min(0).max(40).optional().describe("Mixta: años a tipo fijo. Variable: años antes de pasar a euríbor (normalmente 1)"),
+      spreadPct: z.number().min(-1).max(5).optional().describe("Variable/mixta: diferencial bonificado sobre el euríbor"),
+      loan: z.number().min(1000).optional().describe("Importe que ofrece el banco"),
+      years: z.number().int().min(1).max(40).optional(),
+      bonuses: z
+        .array(
+          z.object({
+            name: z.string().min(1).describe("Nómina, seguro de vida, seguro de hogar, tarjeta, plan de pensiones…"),
+            discountPct: z.number().min(0).max(3).describe("Rebaja del tipo en puntos"),
+            costPerYear: z.number().min(0).describe("Coste anual para el usuario (0 si es gratis)"),
+          }),
+        )
+        .default([]),
+      openingFee: z.number().min(0).optional().describe("Comisión de apertura en euros"),
+      otherCosts: z.number().min(0).optional().describe("Tasación u otros gastos que cobra el banco, en euros"),
+      taePct: z.number().min(0).max(20).optional(),
+      notes: z.string().max(1000).optional(),
+    }),
+    run: async (input: Omit<ReceivedOffer, "id"> & { id?: string }, ctx: ToolContext) => {
+      const { offer, created } = await store.saveOffer(input);
+      const all = await store.listOffers();
+      const [best] = compareOffers(all, offerDefaults(ctx.me.profile), loadRates().euribor.monthlyAvg);
+      return { id: offer.id, nueva: created, total_ofertas: all.length, mas_barata_ahora: best ? best.offer.bank : null };
+    },
+  },
+
+  compare_bank_offers: {
+    description:
+      "Compara las ofertas de hipoteca que el usuario ha recibido de los bancos (guardadas con save_bank_offer): cuota, coste real en todo el plazo con seguros y comisiones, si compensa cada vinculación y cuál sale más barata. Úsala siempre que pregunte qué oferta elegir.",
+    schema: z.object({
+      loan: z.number().min(1000).optional().describe("Importe para las ofertas que no lo traen. Por defecto, la hipoteca máxima del usuario."),
+      years: z.number().int().min(1).max(40).optional(),
+    }),
+    run: async (input: { loan?: number; years?: number }, ctx: ToolContext) => {
+      const offers = await store.listOffers();
+      if (!offers.length) return { ofertas: [], aviso: "No hay ofertas guardadas. Pídele que te pegue las condiciones que le han dado los bancos." };
+      const defaults = { ...offerDefaults(ctx.me.profile), ...input };
+      const rates = loadRates();
+      const ranked = compareOffers(offers, defaults, rates.euribor.monthlyAvg);
+      return {
+        supuestos: `Euríbor constante en ${rates.euribor.monthlyAvg} % (${rates.euribor.month}); vinculaciones con el mismo coste cada año.`,
+        ofertas: ranked.map((c, i) => ({
+          posicion: i + 1,
+          id: c.offer.id,
+          banco: c.offer.bank,
+          tipo: c.offer.type,
+          hipoteca: c.loan,
+          plazo_anos: c.years,
+          cuota: r0(c.payment),
+          cuota_tras_tramo_fijo: c.laterPayment != null ? r0(c.laterPayment) : null,
+          cuota_mas_vinculaciones_al_mes: r0(c.effectiveMonthly),
+          coste_total_con_todo: r0(c.totalCost),
+          coste_total_sin_vinculaciones: r0(c.totalCostWithoutBonuses),
+          coste_total_eligiendo_bien: r0(c.bestTotalCost),
+          contratar_solo: c.keep,
+          vinculaciones: c.bonuses.map((b) => ({ nombre: b.name, ahorro_intereses: r0(b.interestSaved), coste: r0(b.totalCost), compensa: b.worthIt })),
+          comisiones: r0(c.fees),
+          tae_declarada: c.offer.taePct ?? null,
+        })),
+        diferencia_entre_la_mejor_y_la_peor: ranked.length > 1 ? r0(ranked.at(-1)!.bestTotalCost - ranked[0].bestTotalCost) : 0,
+      };
+    },
+  },
+
+  remove_bank_offer: {
+    description: "Borra una oferta de banco guardada (por id, de compare_bank_offers).",
+    schema: z.object({ id: z.string() }),
+    run: async (input: { id: string }) => ({ borrada: await store.removeOffer(input.id) }),
   },
 } as const;
 
