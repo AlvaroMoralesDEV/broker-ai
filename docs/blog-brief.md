@@ -58,6 +58,7 @@ These are the project's real design decisions. Each one is a good post on its ow
 - **pgvector is installed but unused.** It's reserved for a future knowledge base. Don't say the project uses RAG.
 - Don't quote user counts, stars, adoption, accuracy percentages or savings in euros unless the author provides them.
 - Don't name the author or any real person who used it unless the author asks you to.
+- Don't mention the author's job, employer, clients or any other project, and don't compare this project with work done elsewhere. Posts are about Bróker IA only.
 
 ## 6. Voice and style
 
@@ -120,4 +121,5 @@ These are the project's real design decisions. Each one is a good post on its ow
 - [ ] Buyer-facing posts include the "guidance, not financial advice" note.
 - [ ] Code excerpts are copied from the repository, with file paths.
 - [ ] No personal data, real users or private screenshots.
+- [ ] No mention of the author's job, employer, clients or other projects.
 - [ ] A list of anything you could not verify, for the author to check.
