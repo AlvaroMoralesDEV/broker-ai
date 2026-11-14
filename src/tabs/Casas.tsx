@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
-import { redFlags } from "../../shared/broker.ts";
+import { isLinkOnly, redFlags } from "../../shared/broker.ts";
 import { analyzePurchase, type Profile } from "../../shared/finance.ts";
 import { eur, type HomesStore } from "../lib.ts";
+import { Mascot } from "../Mascot.tsx";
 import { ListingCard } from "../ListingCard.tsx";
 import { Segmented, VerdictBadge } from "../ui.tsx";
 
@@ -31,13 +32,15 @@ export function MisViviendas({ profile, store, onSimulate, onAskBroker }: Props)
     [homes, filter, profile],
   );
   const discarded = homes.filter((h) => h.status === "descartada").length;
+  // las guardadas solo con el enlace no tienen números: no entran en la comparativa
+  const analyzed = rows.filter((r) => !isLinkOnly(r.h.listing));
 
   return (
     <div className="page stack">
       <div className="results-head">
         <div>
           <h2 className="page-title">Mis viviendas</h2>
-          <p className="muted">Recalculadas con tu situación de hoy. Para añadir una, pega el anuncio en el chat y pulsa Guardar.</p>
+          <p className="muted">Recalculadas con tu situación de hoy. Para añadir una, pega el anuncio (o solo su enlace) en el chat.</p>
         </div>
         <Segmented<Filter>
           value={filter}
@@ -49,7 +52,7 @@ export function MisViviendas({ profile, store, onSimulate, onAskBroker }: Props)
         />
       </div>
 
-      {rows.length >= 2 && (
+      {analyzed.length >= 2 && (
         <section className="panel">
           <h2>Comparativa</h2>
           <div className="table-wrap">
@@ -69,7 +72,7 @@ export function MisViviendas({ profile, store, onSimulate, onAskBroker }: Props)
                 </tr>
               </thead>
               <tbody>
-                {[...rows]
+                {[...analyzed]
                   .sort((x, y) => x.h.listing.price - y.h.listing.price)
                   .map(({ h, a, flags }) => (
                     <tr key={h.id}>
@@ -133,13 +136,11 @@ export function MisViviendas({ profile, store, onSimulate, onAskBroker }: Props)
       </div>
       {rows.length === 0 && (
         <div className="empty-state">
-          <span className="empty-icon" aria-hidden>
-            ⌂
-          </span>
+          <Mascot size={88} live />
           {filter === "activas" ? (
             <>
               <h3>Aún no sigues ninguna vivienda</h3>
-              <p className="muted">Abre un anuncio en Idealista, copia el texto y pégalo en el chat. Tu bróker lo revisa y lo guardas con un clic.</p>
+              <p className="muted">Abre un anuncio en Idealista, copia el texto y pégalo en el chat: tu bróker lo revisa y lo guardas con un clic. Si solo tienes el enlace, mándalo y lo guarda para tenerlo a mano.</p>
               <button onClick={onAskBroker}>Ir al chat</button>
             </>
           ) : (

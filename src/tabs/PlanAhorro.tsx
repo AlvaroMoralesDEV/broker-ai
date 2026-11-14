@@ -91,7 +91,7 @@ export function PlanAhorro({ profile, price, setPrice }: { profile: Profile; pri
           tickEvery={6}
           series={[
             { name: "Tus ahorros", color: "var(--accent)", values: plan.rows.map((r) => r.savings) },
-            { name: "Entrada + impuestos + gastos", color: "var(--warn)", values: plan.rows.map((r) => r.needed) },
+            { name: "Entrada + impuestos + gastos", color: "var(--series-2)", values: plan.rows.map((r) => r.needed) },
           ]}
         />
       </section>

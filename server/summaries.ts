@@ -1,12 +1,12 @@
 // Respuestas del bróker escritas por código (no por un modelo): veredicto de un anuncio, cambios de
 // perfil, presupuesto, comparativa y ofertas. En modo local o sin IA son la respuesta; son instantáneas
 // y sus cifras salen del motor de cálculo.
-import { monthlyOwnership, redFlags, type HomeListing, type RedFlag, type SavedHome } from "../shared/broker.ts";
+import { isLinkOnly, monthlyOwnership, redFlags, type HomeListing, type RedFlag, type SavedHome } from "../shared/broker.ts";
 import { affordability, analyzePurchase, quoteOffer, type Profile } from "../shared/finance.ts";
 import { compareOffers, offerDefaults, type ReceivedOffer } from "../shared/offers.ts";
 import { ccaaName } from "../shared/taxes.ts";
 import type { StoredProfile } from "./store.ts";
-import { loadRates } from "./tools.ts";
+import { RATES_STALE_DAYS, loadRates, ratesAgeDays } from "./tools.ts";
 
 const pct = (n: number) => `${n.toLocaleString("es-ES", { maximumFractionDigits: 2 })} %`;
 export const eur = (n: number) => `${Math.round(n).toLocaleString("es-ES", { useGrouping: "always" })} €`;
@@ -124,7 +124,14 @@ export function factsSummary(before: StoredProfile, after: StoredProfile & { cha
 
 export function homesSummary(me: StoredProfile, homes: SavedHome[]): string {
   if (!homes.length) return "Aún no tienes viviendas guardadas. Pégame el texto de un anuncio y, si te gusta, la guardamos.";
+  // las guardadas solo con el enlace no tienen datos: se listan aparte, sin números
+  const links = homes.filter((h) => isLinkOnly(h.listing));
+  const linkLines = links.length
+    ? ["", `De ${links.length === 1 ? "esta solo tengo el enlace" : "estas solo tengo el enlace"} (pégame el texto del anuncio y ${links.length === 1 ? "la" : "las"} analizo):`, ...links.map((h) => `- [${h.listing.title}](${h.listing.url})`)]
+    : [];
+  if (links.length === homes.length) return [`Tienes **${homes.length}** ${homes.length === 1 ? "vivienda guardada" : "viviendas guardadas"}, pero todavía sin analizar.`, ...linkLines].join("\n");
   const rows = homes
+    .filter((h) => !isLinkOnly(h.listing))
     .map((h) => ({ h, a: analyzePurchase(profileFor(me.profile, h.listing), h.listing.price), flags: redFlags(h.listing) }))
     .sort((x, y) => x.h.listing.price - y.h.listing.price);
   const lines = [`Tienes **${homes.length}** ${homes.length === 1 ? "vivienda guardada" : "viviendas guardadas"}, recalculadas con tu situación de hoy:`, ""];
@@ -140,6 +147,7 @@ export function homesSummary(me: StoredProfile, homes: SavedHome[]): string {
     const best = [...fits].sort((x, y) => x.flags.length - y.flags.length || (x.h.listing.pricePerM2 ?? Infinity) - (y.h.listing.pricePerM2 ?? Infinity))[0];
     lines.push("", `Por números, la mejor colocada es **${best.h.listing.title}**: entra en tu presupuesto, con menos alertas y mejor precio por m².`);
   }
+  lines.push(...linkLines);
   return lines.join("\n");
 }
 
@@ -158,6 +166,8 @@ export function offersSummary(me: StoredProfile, type?: "fija" | "variable" | "m
     lines.push(`- **${o.bank}** · ${o.product} (${o.type}): ${eur(q.initialPayment)}/mes, TIN ${pct(o.tinBonif)} con bonificaciones${o.tae != null ? `, TAE ${pct(o.tae)}` : ""}`);
   }
   lines.push("", `Euríbor de ${rates.euribor.month}: ${pct(rates.euribor.monthlyAvg)}. Son puntos de partida para negociar: la oferta real depende de tu perfil y exige bonificaciones (nómina, seguros).`);
+  const age = ratesAgeDays(rates);
+  if (age > RATES_STALE_DAYS) lines.push("", `⚠️ Estos datos tienen ${age} días: confirma el tipo actual con el banco antes de decidir.`);
   return lines.join("\n");
 }
 

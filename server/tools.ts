@@ -9,6 +9,8 @@ import {
   KEY_FACTS,
   homeIdFromUrl,
   householdMonthlyIncome,
+  isLinkOnly,
+  linkListing,
   monthlyOwnership,
   redFlags,
   toHomeListing,
@@ -18,6 +20,7 @@ import {
   type SavedHome,
 } from "../shared/broker.ts";
 import { OFFER_TYPES, compareOffers, offerDefaults, type ReceivedOffer } from "../shared/offers.ts";
+import { payDoubt, savingsChangeIn } from "../shared/extract.ts";
 import { CCAA_IDS, ccaaName } from "../shared/taxes.ts";
 import * as store from "./store.ts";
 
@@ -30,6 +33,20 @@ export interface RatesFile {
 
 export const loadRates = (): RatesFile => JSON.parse(readFileSync(new URL("../data/rates.json", import.meta.url), "utf8"));
 
+/** A partir de cuántos días se avisa de que los tipos de data/rates.json pueden estar desfasados. */
+export const RATES_STALE_DAYS = 30;
+
+/** Días que tienen los datos de hipotecas (rates.json se actualiza a mano, así que envejece). */
+export const ratesAgeDays = (rates: RatesFile, now = new Date()): number => Math.max(0, Math.floor((now.getTime() - Date.parse(rates.updated)) / 86_400_000));
+
+/** Aviso para el modelo cuando los datos son viejos; null si están al día. */
+export function ratesWarning(rates: RatesFile, now = new Date()): string | null {
+  const days = ratesAgeDays(rates, now);
+  return days > RATES_STALE_DAYS
+    ? `Los datos de hipotecas tienen ${days} días (son del ${rates.updated}) y pueden haber cambiado. Díselo al usuario y recomiéndale confirmar el tipo con el banco.`
+    : null;
+}
+
 /** Eventos para la interfaz: tarjetas de viviendas y perfil actualizado. */
 export type ToolEvent = { type: "home"; listing: ListingInput; savedId?: string } | { type: "profile"; profile: Profile; extra: ProfileExtra };
 
@@ -39,6 +56,11 @@ export interface ToolContext {
   source: store.Source;
   conversationId?: string;
   emit?: (e: ToolEvent) => void;
+  /**
+   * true cuando los parámetros los ha sacado el extractor determinista (modo local), que ya descarta
+   * brutos y sueldos anuales. Si los ha elegido un modelo, update_profile los comprueba contra la frase.
+   */
+  checked?: boolean;
 }
 
 export async function makeContext(source: store.Source, conversationId?: string, emit?: (e: ToolEvent) => void): Promise<ToolContext> {
@@ -132,6 +154,17 @@ function evaluate(p: Profile, l: HomeListing) {
 }
 
 function homeLine(p: Profile, h: SavedHome) {
+  if (isLinkOnly(h.listing)) {
+    return {
+      id: h.id,
+      titulo: h.listing.title,
+      estado: h.status,
+      notas: h.notes,
+      url: h.listing.url,
+      solo_enlace: true,
+      aviso: "Solo está guardado el enlace: no hay precio ni datos, así que no se puede analizar ni comparar. Pide al usuario el texto o una captura del anuncio.",
+    };
+  }
   const { analysis: a, flags } = evaluate(p, h.listing);
   const first = h.prices[0]?.price;
   return {
@@ -166,11 +199,17 @@ async function missingFacts(): Promise<string[]> {
   return KEY_FACTS.filter((f) => !given.has(f.key)).map((f) => f.ask);
 }
 
+/** Una nota tal y como la ve el modelo. */
+export const noteLine = (n: store.BrokerNote) => ({ id: n.id, fecha: n.at.slice(0, 10), tema: n.topic, nota: n.text });
+
+// Cada herramienta declara `mutates`: true si escribe en la base de datos, false si solo lee o calcula.
+// runToolCalls lo usa para decidir el orden cuando el modelo pide varias a la vez.
 export const TOOLS = {
   get_profile: {
     description:
       "Devuelve lo que sabes del usuario: perfil financiero, datos de bróker (contrato, pagas, cotitular, zonas, plazos), su presupuesto máximo, los datos clave que aún faltan y los últimos cambios que te contó (con fecha).",
     schema: z.object({}),
+    mutates: false,
     run: async (_input: Record<string, never>, ctx: ToolContext) => {
       const { profile: p, extra, known } = ctx.me;
       return {
@@ -180,17 +219,22 @@ export const TOOLS = {
         presupuesto: budgetOf(p),
         datos_que_faltan: await missingFacts(),
         ultimos_cambios: (await store.profileHistory(12)).map((f) => ({ campo: f.field, antes: f.oldValue, ahora: f.newValue, lo_que_dijo: f.note, fecha: f.at.slice(0, 10) })),
+        notas: (await store.listNotes(30)).map(noteLine),
       };
     },
   },
 
   update_profile: {
     description:
-      "Guarda en el perfil lo que el usuario te cuenta de su situación (ahorros, sueldo, contrato, deudas, cotitular, zonas…). Llámala en cuanto te dé un dato nuevo o corrija uno. Si da el sueldo por nómina, pasa netPay y pagas: el equivalente mensual se calcula aquí. Devuelve el presupuesto antes y después y cómo cambia el veredicto de sus viviendas guardadas.",
+      "Guarda en el perfil lo que el usuario te cuenta de su situación (ahorros, sueldo, contrato, deudas, cotitular, zonas…). Llámala en cuanto te dé un dato nuevo o corrija uno. Si da el sueldo por nómina, pasa netPay y pagas: el equivalente mensual se calcula aquí. Devuelve el presupuesto antes y después y qué viviendas guardadas cambian de veredicto. Rechaza un sueldo en bruto o anual (lo compara con 'note'): en ese caso no guarda nada y te dice qué preguntar.",
     schema: z.object({
       note: z.string().max(500).describe("Lo que ha dicho el usuario, con sus palabras (queda en el histórico)"),
       age: z.number().int().min(18).max(80).optional(),
-      savings: z.number().min(0).optional().describe("Ahorros disponibles para la compra"),
+      savings: z.number().min(0).optional().describe("Ahorros TOTALES disponibles para la compra. Si el usuario dice cuánto cambian («réstale 20.000», «he gastado 3.000»), usa savingsChange."),
+      savingsChange: z
+        .number()
+        .optional()
+        .describe("Cambio de los ahorros respecto a los guardados: -20000 si dice «réstale 20.000», 5000 si «súmale 5.000». El total se calcula aquí; no lo calcules tú."),
       netIncome: z.number().min(0).optional().describe("Ingresos netos mensuales del hogar. Solo si no tienes netPay/pagas."),
       monthlyDebts: z.number().min(0).optional(),
       ccaa: z.enum(CCAA_IDS).optional(),
@@ -214,8 +258,30 @@ export const TOOLS = {
       timeline: z.string().optional(),
       notes: z.string().max(1000).optional().describe("Otros datos relevantes para el banco"),
     }),
+    mutates: true,
     run: async (input: Record<string, unknown> & { note: string }, ctx: ToolContext) => {
-      const { note, ...fields } = input;
+      const { note, savingsChange, ...fields } = input as typeof input & { savingsChange?: number };
+      // Ambigüedad: un bruto o un anual guardado como neto por nómina falsea todo lo demás. Se para aquí,
+      // antes de escribir nada, y el error le dice al modelo qué preguntar.
+      if (!ctx.checked) {
+        const doubt = payDoubt(note, fields as { netPay?: number; coBuyerNetPay?: number; netIncome?: number });
+        if (doubt) throw new Error(`No se ha guardado nada de esta llamada. ${doubt} Si había otros datos (ahorros, deudas…), vuelve a llamar sin el sueldo para guardarlos.`);
+        // «réstale 20.000 al ahorro» guardado como ahorros = 20.000 (o un total calculado de cabeza)
+        if (fields.savings != null && savingsChange == null && savingsChangeIn(note)) {
+          throw new Error("No se ha guardado nada de esta llamada. El usuario dice cuánto CAMBIAN sus ahorros, no el total: vuelve a llamar con savingsChange (negativo si resta) y sin savings.");
+        }
+      }
+      if (savingsChange != null) {
+        if (fields.savings != null) throw new Error("No se ha guardado nada: pasa savings (total) o savingsChange (cambio), no los dos.");
+        if (!(await store.givenFields()).has("savings")) {
+          throw new Error("No se ha guardado nada: aún no hay ahorros apuntados a los que sumar o restar. Pregúntale cuánto tiene ahorrado en total.");
+        }
+        const total = ctx.me.profile.savings + savingsChange;
+        if (total < 0) {
+          throw new Error(`No se ha guardado nada: tiene ${ctx.me.profile.savings} € apuntados y restar ${-savingsChange} € deja un número negativo. Pregúntale cuánto tiene ahorrado ahora en total.`);
+        }
+        fields.savings = Math.round(total);
+      }
       const profileKeys = ["age", "savings", "netIncome", "monthlyDebts", "ccaa", "firstHome", "newBuild", "ltvPct", "ratePct", "years"] as const;
       const patch: Partial<Profile> = {};
       const extraPatch: Partial<ProfileExtra> = {};
@@ -235,17 +301,29 @@ export const TOOLS = {
       ctx.me = after;
       if (after.changed.length) ctx.emit?.({ type: "profile", profile: after.profile, extra: after.extra });
 
-      const homes = await store.listHomes();
+      const homes = (await store.listHomes())
+        .filter((h) => !isLinkOnly(h.listing))
+        .map((h) => ({
+        id: h.id,
+        titulo: h.listing.title,
+        precio: h.listing.price,
+        veredicto_antes: analyzePurchase(profileFor(before.profile, h.listing), h.listing.price).verdict,
+        veredicto_ahora: analyzePurchase(profileFor(after.profile, h.listing), h.listing.price).verdict,
+      }));
+      // Sin número de pagas el cálculo supone 12: se dice, para que lo pregunte en vez de darlo por bueno.
+      const avisos: string[] = [];
+      if (fields.netPay != null && after.extra.pagas == null) avisos.push("No ha dicho cuántas pagas tiene: se han supuesto 12. Pregúntaselo (12 o 14), porque cambia sus ingresos.");
+      if (fields.coBuyerNetPay != null && after.extra.coBuyerPagas == null) avisos.push("Falta el número de pagas de la otra persona: se han supuesto 12. Pregúntalo.");
       return {
         campos_cambiados: after.changed,
+        ...(savingsChange != null ? { ahorros_antes: before.profile.savings, ahorros_ahora: after.profile.savings } : {}),
+        avisos,
         ingresos_netos_mensuales: after.profile.netIncome,
         presupuesto_antes: before.known ? budgetOf(before.profile) : null,
         presupuesto_ahora: budgetOf(after.profile),
-        viviendas_guardadas: homes.map((h) => {
-          const was = analyzePurchase(profileFor(before.profile, h.listing), h.listing.price).verdict;
-          const now = analyzePurchase(profileFor(after.profile, h.listing), h.listing.price).verdict;
-          return { id: h.id, titulo: h.listing.title, precio: h.listing.price, veredicto_antes: was, veredicto_ahora: now };
-        }),
+        viviendas_guardadas: homes,
+        // la lista ya filtrada: así no depende de que el modelo compare antes y después una por una
+        viviendas_que_cambian_de_veredicto: homes.filter((h) => h.veredicto_antes !== h.veredicto_ahora),
         datos_que_faltan: await missingFacts(),
       };
     },
@@ -255,6 +333,7 @@ export const TOOLS = {
     description:
       "Calcula el precio máximo de vivienda que el usuario puede permitirse según ingresos (ratio de endeudamiento) y ahorros (entrada + impuestos + gastos). Permite probar otros tipos, plazos, % de financiación o escenarios hipotéticos sin guardarlos.",
     schema: z.object({ ...mortgage, profile: profileOverride.optional() }),
+    mutates: false,
     run: async (input: { ratePct?: number; years?: number; ltvPct?: number; profile?: Partial<Profile> }, ctx: ToolContext) => {
       const p = { ...ctx.me.profile, ...input.profile };
       const a = affordability(p, input);
@@ -274,6 +353,7 @@ export const TOOLS = {
     description:
       "Analiza la compra a un precio concreto (sin anuncio): hipoteca, entrada, impuestos de la comunidad, gastos, ahorros necesarios, cuota, esfuerzo y veredicto (ok / justo / no). Para un anuncio concreto usa evaluate_listing.",
     schema: z.object({ price: z.number().min(1000).describe("Precio de la vivienda en euros"), ...mortgage, profile: profileOverride.optional() }),
+    mutates: false,
     run: async (input: { price: number; ratePct?: number; years?: number; ltvPct?: number; profile?: Partial<Profile> }, ctx: ToolContext) =>
       summary(analyzePurchase({ ...ctx.me.profile, ...input.profile }, input.price, input)),
   },
@@ -282,6 +362,7 @@ export const TOOLS = {
     description:
       "Evalúa un anuncio que el usuario ha pegado (texto o captura de Idealista u otro portal). Extrae tú los datos del anuncio y pásalos; incluye el texto de la descripción en 'description'. Devuelve si puede comprarla, el coste real (impuestos, gastos, cuota, comunidad, IBI), €/m², alertas detectadas con su motivo y si ya la tiene guardada. No la guarda: para eso, save_home.",
     schema: listingSchema,
+    mutates: false,
     run: async (input: ListingInput, ctx: ToolContext) => {
       const l = toHomeListing(input);
       const { analysis, flags, ownership } = evaluate(ctx.me.profile, l);
@@ -306,6 +387,7 @@ export const TOOLS = {
       status: z.enum(HOME_STATUSES).optional().describe("interesa (por defecto), visitar, visitada, oferta, descartada"),
       notes: z.string().max(2000).optional().describe("Notas del usuario sobre la vivienda"),
     }),
+    mutates: true,
     run: async (input: ListingInput & { status?: (typeof HOME_STATUSES)[number]; notes?: string }, ctx: ToolContext) => {
       const { status, notes, ...listingInput } = input;
       const l = toHomeListing(listingInput);
@@ -323,10 +405,41 @@ export const TOOLS = {
     },
   },
 
+  save_home_link: {
+    description:
+      "Guarda SOLO el enlace de un anuncio que no has podido ver (el usuario ha mandado la URL sin el texto ni una captura). Queda en su lista como vivienda que le interesa, sin precio ni datos, para que la tenga a mano y la abra desde ahí. Úsala solo cuando el usuario haya aceptado guardarlo. No sirve para analizar: cuando pegue el anuncio, usa evaluate_listing y save_home con esa misma 'url' y la vivienda se completa.",
+    schema: z.object({
+      url: z.string().url().describe("El enlace tal cual lo mandó el usuario"),
+      notes: z.string().max(2000).optional().describe("Notas del usuario sobre la vivienda"),
+    }),
+    mutates: true,
+    run: async (input: { url: string; notes?: string }, ctx: ToolContext) => {
+      const existingId = homeIdFromUrl(input.url) ?? (await store.homeIdByUrl(input.url));
+      const existing = existingId ? await store.getHome(existingId) : null;
+      // si ya estaba (con datos o sin ellos) no se pisa: un enlace nunca borra un anuncio analizado
+      if (existing) {
+        return { id: existing.id, nueva: false, titulo: existing.listing.title, estado: existing.status, solo_enlace: isLinkOnly(existing.listing) };
+      }
+      const listing = linkListing(input.url);
+      const { home } = await store.saveHome(toHomeListing(listing), { notes: input.notes });
+      ctx.emit?.({ type: "home", listing, savedId: home.id });
+      return {
+        id: home.id,
+        nueva: true,
+        titulo: home.listing.title,
+        estado: home.status,
+        solo_enlace: true,
+        total_guardadas: (await store.listHomes()).length,
+        aviso: "Guardado solo el enlace: no conoces el precio ni ningún dato de esta vivienda. No des cifras sobre ella hasta que el usuario pegue el anuncio.",
+      };
+    },
+  },
+
   list_saved_homes: {
     description:
       "Lista las viviendas guardadas recalculadas con el perfil ACTUAL del usuario (veredicto, cuota, ahorros que faltan, alertas, estado, notas y cambios de precio). Úsala para comparar o cuando cambie su situación.",
     schema: z.object({ includeDiscarded: z.boolean().optional().describe("true para incluir las descartadas") }),
+    mutates: false,
     run: async (input: { includeDiscarded?: boolean }, ctx: ToolContext) => {
       const homes = await store.listHomes(input);
       return { total: homes.length, presupuesto_actual: budgetOf(ctx.me.profile), viviendas: homes.map((h) => homeLine(ctx.me.profile, h)) };
@@ -341,6 +454,7 @@ export const TOOLS = {
       notes: z.string().max(2000).optional().describe("Sustituye las notas anteriores: incluye lo que quieras conservar"),
       price: z.number().min(1000).optional().describe("Nuevo precio si ha bajado o subido"),
     }),
+    mutates: true,
     run: async (input: { id: string; status?: (typeof HOME_STATUSES)[number]; notes?: string; price?: number }, ctx: ToolContext) => {
       const home = await store.updateHome(input.id, input);
       if (!home) throw new Error(`No hay ninguna vivienda guardada con id ${input.id}. Usa list_saved_homes para ver los ids.`);
@@ -351,6 +465,7 @@ export const TOOLS = {
   remove_home: {
     description: "Borra una vivienda guardada. Si el usuario solo la descarta, mejor update_home con status 'descartada' (así queda el histórico).",
     schema: z.object({ id: z.string() }),
+    mutates: true,
     run: async (input: { id: string }) => ({ borrada: await store.removeHome(input.id) }),
   },
 
@@ -362,6 +477,7 @@ export const TOOLS = {
       loan: z.number().min(1000).optional().describe("Importe de la hipoteca. Por defecto, la hipoteca máxima del usuario."),
       years: z.number().int().min(1).max(40).optional(),
     }),
+    mutates: false,
     run: async (input: { type?: "fija" | "variable" | "mixta"; loan?: number; years?: number }, ctx: ToolContext) => {
       const rates = loadRates();
       const p = ctx.me.profile;
@@ -369,6 +485,7 @@ export const TOOLS = {
       const years = input.years ?? p.years;
       return {
         datos_actualizados: rates.updated,
+        aviso_datos: ratesWarning(rates),
         euribor: rates.euribor,
         hipoteca: loan,
         plazo_anos: years,
@@ -427,6 +544,7 @@ export const TOOLS = {
       taePct: z.number().min(0).max(20).optional(),
       notes: z.string().max(1000).optional(),
     }),
+    mutates: true,
     run: async (input: Omit<ReceivedOffer, "id"> & { id?: string }, ctx: ToolContext) => {
       const { offer, created } = await store.saveOffer(input);
       const all = await store.listOffers();
@@ -442,6 +560,7 @@ export const TOOLS = {
       loan: z.number().min(1000).optional().describe("Importe para las ofertas que no lo traen. Por defecto, la hipoteca máxima del usuario."),
       years: z.number().int().min(1).max(40).optional(),
     }),
+    mutates: false,
     run: async (input: { loan?: number; years?: number }, ctx: ToolContext) => {
       const offers = await store.listOffers();
       if (!offers.length) return { ofertas: [], aviso: "No hay ofertas guardadas. Pídele que te pegue las condiciones que le han dado los bancos." };
@@ -450,6 +569,7 @@ export const TOOLS = {
       const ranked = compareOffers(offers, defaults, rates.euribor.monthlyAvg);
       return {
         supuestos: `Euríbor constante en ${rates.euribor.monthlyAvg} % (${rates.euribor.month}); vinculaciones con el mismo coste cada año.`,
+        aviso_datos: ratesWarning(rates),
         ofertas: ranked.map((c, i) => ({
           posicion: i + 1,
           id: c.offer.id,
@@ -476,7 +596,29 @@ export const TOOLS = {
   remove_bank_offer: {
     description: "Borra una oferta de banco guardada (por id, de compare_bank_offers).",
     schema: z.object({ id: z.string() }),
+    mutates: true,
     run: async (input: { id: string }) => ({ borrada: await store.removeOffer(input.id) }),
+  },
+
+  save_note: {
+    description:
+      "Apunta algo que conviene recordar en FUTURAS conversaciones y que no es un dato del perfil ni la nota de una vivienda: por qué descartó un piso, qué le dijo un banco o una agencia, una decisión que ha tomado, una preferencia. Una idea por nota, corta y con el motivo. No la uses para ahorros, sueldo o deudas (eso es update_profile) ni para apuntes de una vivienda guardada (update_home).",
+    schema: z.object({
+      text: z.string().min(3).max(600).describe("La nota, en una o dos frases que se entiendan dentro de un mes"),
+      topic: z.enum(store.NOTE_TOPICS).optional().describe("vivienda, banco, decision, preferencia u otro"),
+    }),
+    mutates: true,
+    run: async (input: { text: string; topic?: store.NoteTopic }, ctx: ToolContext) => {
+      const note = await store.addNote({ ...input, conversationId: ctx.conversationId });
+      return { id: note.id, total_notas: (await store.listNotes(200)).length };
+    },
+  },
+
+  remove_note: {
+    description: "Borra una nota del bróker que ya no vale o que el usuario pide olvidar (por id; los ids están en el contexto y en get_profile).",
+    schema: z.object({ id: z.string().regex(/^\d+$/) }),
+    mutates: true,
+    run: async (input: { id: string }) => ({ borrada: await store.removeNote(input.id) }),
   },
 } as const;
 
@@ -489,4 +631,44 @@ export async function runTool(name: string, input: unknown, ctx: ToolContext): P
   const parsed = tool.schema.safeParse(input);
   if (!parsed.success) throw new Error(`Parámetros no válidos: ${parsed.error.message}`);
   return (tool.run as (i: unknown, c: ToolContext) => Promise<unknown>)(parsed.data, ctx);
+}
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  input: unknown;
+}
+
+export interface ToolOutcome {
+  id: string;
+  ok: boolean;
+  /** el resultado de la herramienta, o el mensaje de error si ok es false */
+  output: unknown;
+}
+
+const mutates = (name: string): boolean => TOOLS[name as ToolName]?.mutates === true;
+
+/**
+ * Ejecuta las herramientas que el modelo ha pedido en un mismo paso.
+ *
+ * Claude puede pedir varias a la vez («ahora cobro 2.400 y mira este piso» → update_profile +
+ * evaluate_listing). Lanzarlas todas en paralelo tiene un fallo: la evaluación puede leer el perfil
+ * antes de que se guarde el sueldo nuevo y dar un veredicto con datos viejos. Por eso:
+ *   1. primero las que escriben, de una en una y en el orden en que las pidió;
+ *   2. después las que solo leen, en paralelo (ya ven el estado final).
+ * Los resultados se devuelven en el orden original, uno por llamada, también cuando fallan.
+ */
+export async function runToolCalls(calls: ToolCall[], ctx: ToolContext, onStart?: (name: string) => void): Promise<ToolOutcome[]> {
+  const done = new Map<string, ToolOutcome>();
+  const run = async (call: ToolCall) => {
+    onStart?.(call.name);
+    try {
+      done.set(call.id, { id: call.id, ok: true, output: await runTool(call.name, call.input, ctx) });
+    } catch (err) {
+      done.set(call.id, { id: call.id, ok: false, output: err instanceof Error ? err.message : String(err) });
+    }
+  };
+  for (const call of calls.filter((c) => mutates(c.name))) await run(call);
+  await Promise.all(calls.filter((c) => !mutates(c.name)).map(run));
+  return calls.map((c) => done.get(c.id)!);
 }

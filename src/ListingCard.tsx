@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { HOME_STATUSES, type HomeStatus, type RedFlag } from "../shared/broker.ts";
+import { HOME_STATUSES, isLinkOnly, type HomeStatus, type RedFlag } from "../shared/broker.ts";
 import type { PurchaseAnalysis } from "../shared/finance.ts";
 import type { Listing } from "../shared/listings.ts";
 import { eur } from "./lib.ts";
@@ -36,6 +36,44 @@ export function ListingCard({ listing: l, analysis: a, flags = [], status, onSta
     l.parking ? "Garaje" : null,
     l.newDevelopment ? "Obra nueva" : null,
   ].filter(Boolean);
+
+  const statusControl =
+    onStatus && status && status !== "guardada" ? (
+      <select value={status} onChange={(e) => onStatus(e.target.value as HomeStatus)} aria-label="Estado">
+        {HOME_STATUSES.map((s) => (
+          <option key={s} value={s}>
+            {STATUS_TEXT[s]}
+          </option>
+        ))}
+      </select>
+    ) : status ? (
+      <span className="pill on">★ {status === "guardada" ? "Guardada" : STATUS_TEXT[status]}</span>
+    ) : null;
+
+  // Guardada solo con el enlace: no hay precio ni datos, así que no se pinta ningún número.
+  if (isLinkOnly(l)) {
+    return (
+      <article className="card listing link-only">
+        <div className="card-body">
+          <div className="card-top">
+            <span className="badge link-badge">Solo el enlace</span>
+          </div>
+          <h3>{l.title}</h3>
+          {l.url && <p className="muted small link-url">{l.url.replace(/^https?:\/\/(www\.)?/, "")}</p>}
+          <p className="muted">Aún no he visto este anuncio. Pega su texto en el chat y te digo si te encaja, el coste real y las alertas.</p>
+          {children}
+          <div className="card-actions">
+            {l.url && (
+              <a className="button" href={l.url} target="_blank" rel="noreferrer">
+                Abrir anuncio ↗
+              </a>
+            )}
+            {statusControl}
+          </div>
+        </div>
+      </article>
+    );
+  }
 
   return (
     <article className={`card listing verdict-${a.verdict}`}>
@@ -81,20 +119,10 @@ export function ListingCard({ listing: l, analysis: a, flags = [], status, onSta
           </button>
           {l.url && (
             <a className="button ghost" href={l.url} target="_blank" rel="noreferrer">
-              Ver anuncio
+              Ver anuncio ↗
             </a>
           )}
-          {onStatus && status && status !== "guardada" ? (
-            <select value={status} onChange={(e) => onStatus(e.target.value as HomeStatus)} aria-label="Estado">
-              {HOME_STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {STATUS_TEXT[s]}
-                </option>
-              ))}
-            </select>
-          ) : status ? (
-            <span className="pill on">★ {status === "guardada" ? "Guardada" : STATUS_TEXT[status]}</span>
-          ) : null}
+          {statusControl}
         </div>
       </div>
     </article>

@@ -281,3 +281,27 @@ export function monthlyOwnership(l: HomeListing, payment: number) {
   const ibi = (l.ibiYearly ?? 0) / 12;
   return { payment, community, ibi, total: payment + community + ibi };
 }
+
+/** Primer enlace de un mensaje, sin la puntuación que lo cierra. */
+export function linkIn(text: string): string | null {
+  const m = text.match(/https?:\/\/[^\s<>"')\]]+/i);
+  return m ? m[0].replace(/[.,;:!?]+$/, "") : null;
+}
+
+/**
+ * Vivienda guardada solo con su enlace: el agente no puede abrir páginas, así que hasta que el
+ * usuario pegue el anuncio no tiene precio ni datos. No se analiza ni entra en las comparativas.
+ */
+export const isLinkOnly = (l: { price: number }): boolean => !(l.price > 0);
+
+/** El "anuncio" de una vivienda de la que solo se conoce el enlace (precio 0 = sin datos). */
+export function linkListing(url: string): ListingInput {
+  const idealista = homeIdFromUrl(url)?.replace("idealista-", "");
+  let host = "";
+  try {
+    host = new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    // enlace mal formado: se guarda igual, con un título genérico
+  }
+  return { title: idealista ? `Anuncio de Idealista ${idealista}` : `Anuncio en ${host || "la web"}`, price: 0, url };
+}

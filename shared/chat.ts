@@ -41,6 +41,7 @@ export const TOOL_LABEL: Record<string, string> = {
   analyze_purchase: "Analizando la compra",
   evaluate_listing: "Analizando el anuncio",
   save_home: "Guardando la vivienda",
+  save_home_link: "Guardando el enlace",
   list_saved_homes: "Repasando tus viviendas",
   update_home: "Actualizando la vivienda",
   remove_home: "Borrando la vivienda",
@@ -48,5 +49,7 @@ export const TOOL_LABEL: Record<string, string> = {
   save_bank_offer: "Apuntando la oferta",
   compare_bank_offers: "Comparando tus ofertas",
   remove_bank_offer: "Borrando la oferta",
+  save_note: "Apuntando una nota",
+  remove_note: "Borrando una nota",
   web_search: "Buscando en la web",
 };

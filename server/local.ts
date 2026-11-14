@@ -2,7 +2,7 @@
 // datos, calcular, guardar, comparar) y el modelo local, si lo hay, solo conversa. Un modelo de 2B en
 // un portátil no rellena bien los parámetros de las herramientas, así que no se le pide.
 import { randomUUID } from "node:crypto";
-import { missingKeyFacts, toHomeListing, type ListingInput } from "../shared/broker.ts";
+import { isLinkOnly, linkIn, missingKeyFacts, toHomeListing, type ListingInput } from "../shared/broker.ts";
 import type { ChatEvent } from "../shared/chat.ts";
 import { extractAnswer, extractFacts, looksLikeListing, norm, numbersIn, parseListingText, parseNumberEs } from "../shared/extract.ts";
 import { ollama, type ProviderInfo } from "./provider.ts";
@@ -25,6 +25,18 @@ async function pendingFacts(): Promise<{ key: string; question: string }[]> {
 }
 
 const WANTS_SAVE = /\b(guarda(la|lo|r|me)?|guardala|apunta(la|r)?|anade(la)?|me la quedo|quiero (visitarla|seguirla))\b/;
+/** Acepta lo que el bróker acaba de proponer («¿La guardo?» → «sí», «vale», «venga»). */
+const SAYS_YES = /^\W*(si|vale|ok|okay|claro|venga|dale|adelante|hazlo|por favor|perfecto|de acuerdo)\b/;
+/** Con estas palabras ofrece guardar un enlace que no ha podido abrir; así se reconoce el «sí» siguiente. */
+const LINK_OFFER = "¿guardo el enlace";
+const LISTING_OFFER = "¿La guardo para seguirla?";
+/**
+ * Preguntas de la entrevista con respuesta cerrada: si la respuesta no se entiende, se repite la pregunta
+ * con las opciones en vez de pasársela al modelo local (que contestaría cualquier cosa) o adivinar.
+ */
+const CLARIFY: Record<string, string> = {
+  coBuyer: "No me ha quedado claro. ¿Compras tú solo, o con otra persona (pareja, familiar…)? Me basta con «solo» o «con mi pareja».",
+};
 const ASKS_BUDGET = /cuanto puedo|presupuesto|permitir|hasta cuanto|precio maximo|que puedo comprar/;
 const ASKS_HOMES = /compara|mis viviendas|mis pisos|guardad[ao]s|cual (es|me) (la )?(mejor|conviene)/;
 const ASKS_OFFERS = /(hipoteca|banco|fija|variable|mixta).*(mejor|convien|oferta|ofrece|compar|barat|cual)|(mejor|convien|oferta|ofrece|compar|barat|cual|que banco).*(hipoteca|banco)/;
@@ -44,7 +56,7 @@ const HELP = `Esto lo hago al momento, sin esperas:
 - **Evaluar un anuncio:** pega el texto del anuncio de Idealista y te digo si te encaja, el coste real y las alertas.
 - **Apuntar tu situación:** dime tus ahorros, tu sueldo neto y pagas, contrato, deudas… y recalculo todo.
 - **Tu presupuesto:** pregúntame cuánto puedes permitirte.
-- **Tus viviendas:** di «guárdala» tras un anuncio, o «compara mis viviendas».
+- **Tus viviendas:** di «guárdala» tras un anuncio, o «compara mis viviendas». Si solo tienes el enlace, mándamelo y lo guardo para que lo tengas a mano.
 - **Hipotecas:** pregúntame qué hipoteca te conviene.`;
 
 function textOf(m: Msg): string {
@@ -66,6 +78,32 @@ function lastListing(history: Msg[]): ListingInput | null {
   return null;
 }
 
+/** Lo último que dijo el bróker (para saber si estaba ofreciendo guardar algo). */
+function lastReply(history: Msg[]): string {
+  for (const m of [...history].reverse()) {
+    if (m.role === "assistant" && textOf(m)) return textOf(m);
+  }
+  return "";
+}
+
+/**
+ * El enlace que el usuario mandó hace poco y del que aún no se ha visto el anuncio. Sirve para
+ * guardarlo cuando dice «sí», y para ponérselo al anuncio si después pega solo el texto (al copiar
+ * la página con Ctrl+A la URL no viene). Se mira poco hacia atrás: tres mensajes del usuario como
+ * mucho, y nunca más allá del último anuncio evaluado.
+ */
+function recentLink(history: Msg[]): string | null {
+  let userTexts = 0;
+  for (const m of [...history].reverse()) {
+    if (m.role === "assistant" && typeof m.content !== "string" && m.content.some((b) => b.type === "tool_use" && (b.name === "evaluate_listing" || b.name === "save_home"))) return null;
+    if (m.role !== "user" || !textOf(m)) continue;
+    const link = linkIn(textOf(m));
+    if (link) return link;
+    if (++userTexts >= 3) return null;
+  }
+  return null;
+}
+
 /** Respuesta del modelo local a una pregunta libre, con el contexto del usuario y un glosario. */
 async function localAnswer(model: string, history: Msg[], ctx: ToolContext, onText: (t: string) => void, signal: AbortSignal): Promise<string> {
   const homes = await store.listHomes();
@@ -73,7 +111,7 @@ async function localAnswer(model: string, history: Msg[], ctx: ToolContext, onTe
   const context = [
     ctx.me.known ? budgetLine(ctx.me.profile).replace(/\*\*/g, "") : "El usuario aún no ha dado sus datos financieros.",
     ctx.me.known ? `Ahorros ${eur(ctx.me.profile.savings)}; ingresos netos ${eur(ctx.me.profile.netIncome)}/mes; deudas ${eur(ctx.me.profile.monthlyDebts)}/mes.` : "",
-    homes.length ? `Viviendas guardadas: ${homes.map((h) => `${h.listing.title} (${eur(h.listing.price)})`).join("; ")}.` : "No tiene viviendas guardadas.",
+    homes.length ? `Viviendas guardadas: ${homes.map((h) => `${h.listing.title} (${isLinkOnly(h.listing) ? "solo el enlace, sin datos" : eur(h.listing.price)})`).join("; ")}.` : "No tiene viviendas guardadas.",
     missing.length ? `Datos que aún no ha dado: ${missing.map((m) => m.label.toLowerCase()).join(", ")}.` : "",
   ]
     .filter(Boolean)
@@ -135,10 +173,16 @@ export async function runLocal(
   signal: AbortSignal,
 ): Promise<void> {
   const ctx = await makeContext("chat", conversationId, (e) => emit(e));
-  const history = await store.getMessages(conversationId);
+  // los parámetros de las herramientas los saca shared/extract.ts, que ya descarta brutos y anuales
+  ctx.checked = true;
+  // los mensajes 'system' son contexto que el servidor añadió para Claude: aquí no pintan nada
+  const history = (await store.getMessages(conversationId)).filter((m) => m.role !== "system");
   const text = turn.text.trim();
   const t = norm(text);
   const interviewStarted = history.some((m) => m.role === "assistant");
+  // antes de añadir este mensaje: qué ofreció el bróker y qué enlace hay pendiente de ver
+  const offered = lastReply(history);
+  const pendingLink = recentLink(history);
   const pending = (await pendingFacts())[0]?.key;
 
   const userMsg: Msg = { role: "user", content: [{ type: "text", text }] };
@@ -174,6 +218,18 @@ export async function runLocal(
     return failed ? null : (output as Record<string, unknown>);
   };
 
+  const saveLink = async (url: string) => {
+    const saved = await call("save_home_link", { url });
+    if (!saved) return;
+    say(
+      saved.nueva
+        ? "Guardado el enlace en **Mis viviendas** como «Me interesa»: desde ahí lo abres cuando quieras. Aún no tiene datos; en cuanto me pegues el texto del anuncio lo analizo y se completa."
+        : saved.solo_enlace
+          ? "Ese enlace ya lo tenías guardado en **Mis viviendas**. Sigue sin datos: pégame el texto del anuncio y lo analizo."
+          : `Esa vivienda ya la tenías guardada: **${saved.titulo}**.`,
+    );
+  };
+
   if (turn.images?.length) {
     say("Sin Claude no puedo leer capturas. Abre el anuncio, selecciona todo el texto de la página (Ctrl+A), cópialo y pégalo aquí: con eso me basta.");
   }
@@ -181,6 +237,8 @@ export async function runLocal(
   let handled = Boolean(turn.images?.length && !text);
   let factsTurn = false;
   let justGreeted = false;
+  /** ha quedado una pregunta en el aire (¿guardo el enlace?): no se añade otra de la entrevista */
+  let asked = false;
 
   if (!handled && HELLO.test(t)) {
     const following = (await store.listHomes()).length;
@@ -201,15 +259,32 @@ Si quieres que empecemos por tu presupuesto, dime «empezar».`,
 
   if (!handled && looksLikeListing(text)) {
     const listing = parseListingText(text)!;
+    // pega el texto del anuncio cuyo enlace mandó antes: es la misma vivienda
+    if (!listing.url && pendingLink) listing.url = pendingLink;
     if (await call("evaluate_listing", listing as unknown as Record<string, unknown>)) {
       say(listingSummary(ctx.me, toHomeListing(listing)));
       if (WANTS_SAVE.test(t)) {
         const saved = await call("save_home", listing as unknown as Record<string, unknown>);
         if (saved) say(`Guardada. Tienes ${saved.total_guardadas} en seguimiento.`);
-      } else say("¿La guardo para seguirla? Dime «guárdala» o pulsa **Guardar** en la tarjeta.");
+      } else say(`${LISTING_OFFER} Dime «guárdala» o pulsa **Guardar** en la tarjeta.`);
     }
     handled = true;
-  } else if (!handled && WANTS_SAVE.test(t) && text.length < 120) {
+  } else if (!handled && linkIn(text)) {
+    // Un enlace sin el anuncio: no se puede abrir, y hay que decirlo en vez de dejar que conteste el modelo.
+    const url = linkIn(text)!;
+    say(
+      "No puedo abrir enlaces, así que todavía no he visto ese anuncio y no sé nada de la vivienda. Para analizarla, abre la página, selecciona todo el texto (Ctrl+A), cópialo (Ctrl+C) y pégalo aquí.",
+    );
+    if (WANTS_SAVE.test(t)) await saveLink(url);
+    else {
+      say(`Mientras tanto, ${LINK_OFFER} en «Mis viviendas» como vivienda que te interesa, para tenerlo a mano? Dime «sí» o «guárdalo».`);
+      asked = true;
+    }
+    handled = true;
+  } else if (!handled && pendingLink && offered.includes(LINK_OFFER) && text.length < 120 && (SAYS_YES.test(t) || WANTS_SAVE.test(t))) {
+    await saveLink(pendingLink);
+    handled = true;
+  } else if (!handled && text.length < 120 && (WANTS_SAVE.test(t) || (SAYS_YES.test(t) && offered.includes(LISTING_OFFER)))) {
     const listing = lastListing(history);
     if (listing) {
       const saved = await call("save_home", listing as unknown as Record<string, unknown>);
@@ -232,12 +307,16 @@ Si quieres que empecemos por tu presupuesto, dime «empezar».`,
       facts.extra = { ...answer.extra, ...facts.extra };
     }
     const fields = { ...facts.profile, ...facts.extra };
-    if (Object.keys(fields).length) {
+    if (Object.keys(fields).length || facts.savingsChange != null) {
       const before = ctx.me;
-      const out = await call("update_profile", { note: text.slice(0, 500), ...fields });
+      const out = await call("update_profile", { note: text.slice(0, 500), ...fields, ...(facts.savingsChange != null ? { savingsChange: facts.savingsChange } : {}) });
       if (out) {
         const changed = out.campos_cambiados as string[];
-        say(changed.length ? factsSummary(before, { ...ctx.me, changed }, await store.listHomes(), facts.doubts) : `Eso ya lo tenía apuntado. ${budgetLine(ctx.me.profile)}`);
+        const delta =
+          facts.savingsChange != null
+            ? `Tus ahorros pasan de ${eur(before.profile.savings)} a **${eur(ctx.me.profile.savings)}** (${facts.savingsChange < 0 ? "−" : "+"}${eur(Math.abs(facts.savingsChange))}).\n\n`
+            : "";
+        say(delta + (changed.length ? factsSummary(before, { ...ctx.me, changed }, await store.listHomes(), facts.doubts) : `Eso ya lo tenía apuntado. ${budgetLine(ctx.me.profile)}`));
       }
       handled = factsTurn = true;
     } else if (facts.doubts.length) {
@@ -282,6 +361,13 @@ Si quieres que empecemos por tu presupuesto, dime «empezar».`,
     }
   }
 
+  // Nada ha entendido el mensaje y lo último fue una pregunta cerrada de la entrevista: se pide aclaración.
+  const question = pending ? (await pendingFacts())[0] : undefined;
+  if (!handled && question && CLARIFY[question.key] && offered.includes(question.question) && text.length <= 160) {
+    say(CLARIFY[question.key]);
+    handled = asked = true;
+  }
+
   if (!handled && provider.kind === "ollama" && provider.model) {
     try {
       let first = true;
@@ -308,8 +394,8 @@ Si quieres que empecemos por tu presupuesto, dime «empezar».`,
   // La entrevista la lleva el código: siguiente dato que falta, en orden de impacto.
   const missing = await pendingFacts();
   const essentials = missing.some((m) => m.key === "savings" || m.key === "netIncome");
-  if (justGreeted) {
-    // solo ha saludado: no se le interroga todavía
+  if (justGreeted || asked) {
+    // solo ha saludado, o hay una pregunta pendiente: no se le interroga todavía
   } else if (missing.length && (factsTurn || essentials)) say(missing[0].question);
   else if (factsTurn && !missing.length) say("Con esto ya tengo todo lo importante. Cuando veas un anuncio que te guste, pégamelo y lo revisamos.");
 

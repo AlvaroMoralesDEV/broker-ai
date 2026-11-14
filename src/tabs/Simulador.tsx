@@ -149,7 +149,7 @@ export function Simulador({ profile, update, price, setPrice, budget }: Props) {
           format={eur}
           series={[
             { name: "Deuda pendiente", color: "var(--accent)", values: s.rows.map((r) => r.balance) },
-            { name: "Intereses pagados (acumulado)", color: "var(--warn)", values: s.rows.reduce<number[]>((acc, r) => [...acc, (acc.at(-1) ?? 0) + r.interest], []) },
+            { name: "Intereses pagados (acumulado)", color: "var(--series-2)", values: s.rows.reduce<number[]>((acc, r) => [...acc, (acc.at(-1) ?? 0) + r.interest], []) },
           ]}
         />
       </section>

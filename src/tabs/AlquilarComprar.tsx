@@ -58,7 +58,7 @@ export function AlquilarComprar({ profile, price }: { profile: Profile; price: n
           format={eur}
           series={[
             { name: "Comprando", color: "var(--accent)", values: r.rows.map((x) => x.buyWealth) },
-            { name: "Alquilando e invirtiendo", color: "var(--warn)", values: r.rows.map((x) => x.rentWealth) },
+            { name: "Alquilando e invirtiendo", color: "var(--series-2)", values: r.rows.map((x) => x.rentWealth) },
           ]}
         />
         <p className="muted small">

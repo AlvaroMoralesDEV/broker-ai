@@ -37,6 +37,35 @@ export interface ExtractedFacts {
   extra: Partial<ProfileExtra>;
   /** cosas que hay que preguntar porque el texto es ambiguo */
   doubts: string[];
+  /**
+   * cambio relativo de los ahorros («réstale 20.000 al ahorro» → -20000). El total lo calcula quien
+   * conoce los ahorros actuales (update_profile), nunca este extractor ni un modelo.
+   */
+  savingsChange?: number;
+}
+
+const SAVINGS_DOWN = String.raw`\b(?:rest\w*|quit\w*|descont\w*|descuent\w*|reduc\w*|rebaj\w*|gast\w*|pagad[oa]|pague|sac\w*|menos)\b`;
+// «más» cuenta, pero no «más de 20.000» (eso es una cantidad aproximada, no un aumento)
+const SAVINGS_UP = String.raw`\b(?:sum\w*|anad\w*|agreg\w*|aument\w*)\b|\bmas\b(?!\s+de\b)`;
+
+/**
+ * ¿El mensaje cambia los ahorros en vez de darlos? «réstale al ahorro 20 mil», «he gastado 3.000 de los
+ * ahorros», «súmale 5.000 a mis ahorros». Devuelve null si no es un cambio relativo; si lo es pero no está
+ * claro cuánto o en qué sentido, devuelve la duda que hay que preguntar.
+ *
+ * Existe porque «réstale 20.000» contiene un número junto a «ahorro», y guardarlo como ahorros totales
+ * cambia el presupuesto sin que nada falle.
+ */
+export function savingsChangeIn(message: string): { change: number } | { doubt: string } | null {
+  const t = norm(message);
+  if (!/ahorr/.test(t)) return null;
+  const down = new RegExp(SAVINGS_DOWN).test(t);
+  const up = new RegExp(SAVINGS_UP).test(t);
+  if (!down && !up) return null;
+  const amounts = numbersIn(message).filter((n) => n >= 100);
+  if (down && up) return { doubt: "No sé si quieres sumar o restar a tus ahorros. ¿Cuánto tienes ahorrado ahora en total?" };
+  if (amounts.length !== 1) return { doubt: "No me ha quedado claro cuánto cambian tus ahorros. ¿Cuánto tienes ahorrado ahora en total?" };
+  return { change: down ? -amounts[0] : amounts[0] };
 }
 
 /** Datos de la situación del usuario que se pueden leer sin ambigüedad en su mensaje. */
@@ -46,8 +75,12 @@ export function extractFacts(message: string): ExtractedFacts {
   const extra: Partial<ProfileExtra> = {};
   const doubts: string[] = [];
 
+  // ahorros que cambian: "réstale al ahorro 20 mil" (el total lo calcula update_profile)
+  const change = savingsChangeIn(message);
   // ahorros: "42.000 € ahorrados", "tengo 42k de ahorros", "mis ahorros son 42.000", "tengo 42.000 euros"
-  const savings =
+  const savings = change
+    ? null
+    :
     first(t, String.raw`(${NUM})\s*(?:€|euros?|eur)?\s*(?:de\s+|en\s+)?ahorr`) ??
     first(t, String.raw`ahorr\w*(?:(?!cobr|gan|sueld|nomin)\D){0,25}?(${NUM})`) ??
     first(t, String.raw`tengo\s+(?:unos\s+)?(${NUM})\s*(?:€|euros?)`);
@@ -93,13 +126,95 @@ export function extractFacts(message: string): ExtractedFacts {
   const contract = first(t, String.raw`\b(indefinid[oa]|temporal|autonom[oa]|funcionari[oa])\b`);
   if (contract) extra.contractType = CONTRACT_TYPES.find((c) => contract[1].startsWith(c.slice(0, 7))) ?? "otro";
 
-  if (/\b(con mi (pareja|novi[oa]|mujer|marido|espos[oa]|chic[oa])|entre los dos|compramos (los dos|juntos))\b/.test(t)) extra.coBuyer = true;
-  else if (/\b(compro|comprar|voy) sol[oa]\b|\byo sol[oa]\b/.test(t)) extra.coBuyer = false;
+  // en un mensaje libre solo cuentan las frases claras («compro con mi pareja», «estoy soltero»)
+  const buyer = buyingWith(t, "strict");
+  if (buyer === "with") extra.coBuyer = true;
+  else if (buyer === "alone") extra.coBuyer = false;
 
   const region = regionIn(message);
   if (region && /\b(comprar|busco|buscando|vivo|mudar\w*|zona)\b/.test(t)) profile.ccaa = region;
 
-  return { profile, extra, doubts };
+  if (change && "doubt" in change) doubts.push(change.doubt);
+  return { profile, extra, doubts, ...(change && "change" in change ? { savingsChange: change.change } : {}) };
+}
+
+/** Personas con las que se puede comprar. */
+const PEOPLE = String.raw`pareja|novi[oa]|mujer|marido|espos[oa]|chic[oa]|herman[oa]s?|amig[oa]s?|madre|padre|padres|familia|socio|socia`;
+
+/** ¿La palabra que empieza en `index` está negada? «no tengo pareja», «sin pareja», «no compro solo». */
+function negated(t: string, index: number): boolean {
+  // hasta dos palabras entre la negación y la palabra, sin cruzar una coma: «no, solo yo» no es negación
+  return /\b(no|ni|sin|nunca|tampoco)\b(?:\s+[a-z]+){0,2}\s*$/.test(t.slice(Math.max(0, index - 30), index));
+}
+
+/** Coincidencias de `pattern` en `t` separadas en afirmadas y negadas. */
+function hits(t: string, pattern: string): { yes: number; no: number } {
+  let yes = 0;
+  let no = 0;
+  for (const m of t.matchAll(new RegExp(pattern, "g"))) {
+    if (negated(t, m.index)) no++;
+    else yes++;
+  }
+  return { yes, no };
+}
+
+/**
+ * ¿Compra solo o acompañado? Devuelve null si el texto no lo dice o se contradice: entonces se pregunta,
+ * no se adivina. Mirar la negación es lo importante: «no tengo pareja» contiene «pareja» y significa solo.
+ *
+ * - "strict": frases inequívocas, para cualquier mensaje («compro con mi pareja», «estoy soltera»).
+ * - "answer": además respuestas sueltas a «¿Compras solo o con otra persona?» («sola», «mi novio», «yo»).
+ */
+export function buyingWith(text: string, mode: "strict" | "answer"): "alone" | "with" | null {
+  const t = norm(text);
+  // «solo» como adverbio («solo tengo 20.000») no dice nada de con quién compra
+  const SOLO = String.raw`\bsol[oa]\b(?!\s+(?:tengo|tenemos|cobro|gano|quiero|puedo|me|es|un|una|si|hay|\d))`;
+  const alonePhrase = hits(t, String.raw`\b(?:compro|comprar|comprare|compraria|voy|ire|la compro|lo compro)(?: (?:la casa|el piso|la vivienda))? sol[oa]\b|\bsolter[oa]\b|\bpor mi cuenta\b|\bcon nadie\b|\bsin nadie\b`);
+  const withPhrase = hits(t, String.raw`\bcon (?:mi|mis) (?:${PEOPLE})\b|\bentre (?:los|las) dos\b|\bcompramos\b|\ba medias\b`);
+  // «no tengo pareja», «sin pareja»: decir que no hay otra persona es decir que compra solo
+  const noPartner = hits(t, String.raw`\b(?:pareja|novi[oa]|marido|mujer|espos[oa])\b`).no;
+
+  const alone = alonePhrase.yes + withPhrase.no + noPartner;
+  const company = withPhrase.yes + alonePhrase.no;
+  if (alone && !company) return "alone";
+  if (company && !alone) return "with";
+  if (alone && company) return null;
+  if (mode === "strict") return null;
+
+  // respuesta corta a la pregunta: valen palabras sueltas
+  const soloWord = hits(t, SOLO);
+  const person = hits(t, String.raw`\b(?:${PEOPLE}|los dos|las dos|junt[oa]s|otra persona|acompanad[oa])\b`);
+  const looseAlone = soloWord.yes + person.no + (/^\W*(?:yo|nadie|ninguna|nada|solo yo|yo solo|yo sola|sola yo|solo yo mism[oa])\W*$/.test(t) ? 1 : 0) + (/\b(?:divorciad|separad|viud)[oa]\b/.test(t) ? 1 : 0);
+  const looseWith = person.yes + soloWord.no;
+  if (looseAlone && !looseWith) return "alone";
+  if (looseWith && !looseAlone) return "with";
+  return null;
+}
+
+/**
+ * Comprobación de un sueldo que alguien (el modelo) quiere guardar como NETO POR NÓMINA, contra la
+ * frase del usuario. Devuelve el motivo para no guardarlo, o null si no hay nada raro.
+ *
+ * Existe porque guardar un bruto o un sueldo anual como neto mensual infla el presupuesto en decenas
+ * de miles de euros sin que nada falle. El prompt ya le dice a Claude que pregunte, pero una regla que
+ * protege los números tiene que estar en código: si el prompt falla, esto lo para.
+ */
+export function payDoubt(note: string, pay: { netPay?: number; coBuyerNetPay?: number; netIncome?: number }): string | null {
+  const values = [pay.netPay, pay.coBuyerNetPay, pay.netIncome].filter((v): v is number => v != null);
+  if (!values.length) return null;
+  const t = norm(note);
+  // «brutos» sin que aparezca también el neto: "30.000 brutos". Con los dos ("1.900 netos, 28.000 brutos") se acepta.
+  if (/\bbrut/.test(t) && !/\bnet[oa]s?\b|\blimpi[oa]s?\b/.test(t)) {
+    return "El usuario ha dado el sueldo en BRUTO y aquí solo se guarda el neto. Pregúntale cuánto le llega neto en cada nómina y cuántas pagas tiene.";
+  }
+  // una nómina de más de 15.000 € netos es casi seguro un sueldo anual
+  if ([pay.netPay, pay.coBuyerNetPay].some((v) => v != null && v > 15000)) {
+    return "Ese importe parece un sueldo ANUAL, no una nómina. Pregúntale el neto de cada nómina y cuántas pagas tiene.";
+  }
+  if (/\b(al ano|anual(es)?)\b/.test(t) && !/\bpagas?\b|al mes|mensual|nomina|cada mes/.test(t)) {
+    return "El usuario habla de un importe ANUAL y aquí se guarda el neto por nómina. Pregúntale el neto de cada nómina y cuántas pagas tiene.";
+  }
+  return null;
 }
 
 /**
@@ -133,8 +248,8 @@ export function extractAnswer(pending: string, message: string): ExtractedFacts 
     if (pagas) out.extra.coBuyerPagas = pagas;
   } else if (pending === "monthlyDebts" && (no || (nums.length === 1 && nums[0] <= 5000))) out.profile.monthlyDebts = no ? 0 : nums[0];
   else if (pending === "coBuyer") {
-    if (/\bsol[oa]\b/.test(t)) out.extra.coBuyer = false;
-    else if (/pareja|novi[oa]|mujer|marido|espos[oa]|los dos|junt[oa]s|herman[oa]|amig[oa]|otra persona|acompanad/.test(t)) out.extra.coBuyer = true;
+    const buyer = buyingWith(text, "answer");
+    if (buyer) out.extra.coBuyer = buyer === "with";
   } else if (pending === "ccaa") {
     const region = regionIn(text);
     if (region) out.profile.ccaa = region;

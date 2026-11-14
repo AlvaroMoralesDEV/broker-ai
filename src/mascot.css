@@ -1,0 +1,70 @@
+/* ================= La casita: mascota del bróker ================= */
+.mascot { display: block; overflow: visible; flex: none; }
+.mascot.live { cursor: pointer; }
+.mascot .m-shadow { fill: rgb(60 30 10 / 14%); }
+.mascot .m-wall { fill: var(--m-wall); stroke: var(--m-edge); stroke-width: 2; }
+.mascot .m-roof { fill: var(--m-roof); stroke: var(--m-roof); stroke-width: 10; stroke-linejoin: round; }
+.mascot .m-shine { fill: none; stroke: rgb(255 255 255 / 40%); stroke-width: 4; stroke-linecap: round; }
+.mascot .m-chimney { fill: var(--m-roof-dark); }
+.mascot .m-eye ellipse, .mascot .m-fill { fill: var(--m-face); }
+.mascot .m-glint { fill: #fff; }
+.mascot .m-line { fill: none; stroke: var(--m-face); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.mascot .m-cheek { fill: var(--m-roof); opacity: 0.32; }
+.mascot .m-smoke circle { fill: var(--muted); opacity: 0; }
+.mascot .m-zzz text { fill: var(--muted); font: 700 13px system-ui, sans-serif; opacity: 0; }
+
+.mascot .m-body, .mascot .m-eye, .mascot .m-talk, .mascot .m-smoke circle, .mascot .m-zzz text { transform-box: fill-box; transform-origin: 50% 50%; }
+.mascot .m-body { transform-origin: 50% 100%; }
+.mascot .m-eyes { transform: translate(var(--look-x, 0px), var(--look-y, 0px)); transition: transform 0.12s ease-out; }
+
+/* qué cara pone en cada estado */
+.mascot :is(.m-joy, .m-shut, .m-brows, .m-grin, .m-talk, .m-o, .m-frown, .m-smoke, .m-zzz) { display: none; }
+.mascot:not(.mood-idle) .m-smile { display: none; }
+.mascot:is(.mood-happy, .mood-sleeping) .m-eyes { display: none; }
+.mood-happy :is(.m-joy, .m-grin),
+.mood-sleeping :is(.m-shut, .m-o, .m-zzz),
+.mood-thinking :is(.m-o, .m-smoke),
+.mood-talking .m-talk,
+.mood-worried :is(.m-frown, .m-brows) { display: inline; }
+
+/* vida: respira y parpadea solo la que está «viva»; los estados animan siempre */
+.mascot.live .m-body { animation: m-breathe 4s ease-in-out infinite; }
+.mascot.live .m-eye { animation: m-blink 5.2s infinite; }
+.mascot.mood-thinking .m-body { animation: m-wiggle 2.4s ease-in-out infinite; }
+.mascot.mood-thinking .m-eyes { animation: m-ponder 2.4s ease-in-out infinite; }
+.mascot.mood-thinking .m-smoke circle { animation: m-puff 1.8s ease-out infinite; }
+.mascot.mood-thinking .m-smoke circle:nth-child(2) { animation-delay: 0.6s; }
+.mascot.mood-thinking .m-smoke circle:nth-child(3) { animation-delay: 1.2s; }
+.mascot.mood-talking .m-body { animation: m-bob 0.5s ease-in-out infinite; }
+.mascot.mood-talking .m-talk { animation: m-talk 0.32s ease-in-out infinite; }
+.mascot.mood-happy .m-body { animation: m-hop 0.7s ease-in-out infinite; }
+.mascot.mood-worried .m-body { animation: m-shake 0.35s ease-in-out 2; }
+.mascot.mood-sleeping .m-body { animation: m-breathe 6s ease-in-out infinite; }
+.mascot.mood-sleeping .m-zzz text { animation: m-zzz 3s ease-out infinite; }
+.mascot.mood-sleeping .m-zzz text:nth-child(2) { animation-delay: 1.5s; }
+
+@keyframes m-breathe { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(1.02, 0.975); } }
+@keyframes m-blink { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.08); } }
+@keyframes m-wiggle { 0%, 100% { transform: rotate(-2deg); } 50% { transform: rotate(2deg); } }
+@keyframes m-ponder { 0%, 100% { transform: translate(-2.5px, -3px); } 50% { transform: translate(2.5px, -3px); } }
+@keyframes m-puff { 0% { opacity: 0; transform: translate(0, 0) scale(0.5); } 25% { opacity: 0.7; } 100% { opacity: 0; transform: translate(5px, -18px) scale(1.4); } }
+@keyframes m-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+@keyframes m-talk { 0%, 100% { transform: scaleY(0.35); } 50% { transform: scaleY(1); } }
+@keyframes m-hop { 0%, 100% { transform: translateY(0) scale(1, 1); } 30% { transform: translateY(-9px) scale(0.97, 1.04); } 60% { transform: translateY(0) scale(1.05, 0.94); } }
+@keyframes m-shake { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(-3deg); } 75% { transform: rotate(3deg); } }
+@keyframes m-zzz { 0% { opacity: 0; transform: translate(0, 4px) scale(0.7); } 30% { opacity: 0.9; } 100% { opacity: 0; transform: translate(4px, -10px) scale(1.15); } }
+
+/* --- la casita en la bienvenida --- */
+.hero-mascot { position: relative; display: grid; place-items: center; margin-bottom: 4px; }
+.hero-mascot::before { content: ""; position: absolute; inset: -26px; border-radius: 50%; background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 24%, transparent), transparent); }
+.hero-mascot .mascot { position: relative; }
+
+/* --- la casita posada sobre el cuadro de texto, con su bocadillo --- */
+.companion { display: flex; align-items: flex-end; gap: 8px; min-height: 58px; margin-bottom: -15px; padding-left: 14px; position: relative; z-index: 1; pointer-events: none; }
+.companion > * { pointer-events: auto; }
+.bubble { margin: 0 0 24px; display: flex; gap: 12px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 14px 14px 14px 4px; padding: 7px 12px; font-size: 0.88rem; box-shadow: var(--shadow); animation: bubble-in 0.22s ease-out; }
+.bubble.doing { color: var(--muted); }
+.bubble button { flex: none; }
+.companion.bare { min-height: 0; margin-bottom: 0; padding-left: 0; }
+.companion.bare .bubble { margin-bottom: 0; border-radius: 14px; }
+@keyframes bubble-in { from { opacity: 0; transform: translateY(4px) scale(0.97); } }

@@ -4,6 +4,7 @@ import { TOOL_LABEL, type ChatEvent, type DisplayMsg, type HomeCardData, type Im
 import { analyzePurchase, type Profile } from "../shared/finance.ts";
 import type { HomesStore, Provider } from "./lib.ts";
 import { ListingCard } from "./ListingCard.tsx";
+import { Mascot, type Mood } from "./Mascot.tsx";
 
 /** Markdown mínimo (negritas, cursivas, listas, títulos y enlaces) sin inyectar HTML. */
 function inline(text: string): ReactNode[] {
@@ -83,6 +84,8 @@ export function Chat({ profile, known, provider, conversationId, onConversation,
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [dragging, setDragging] = useState(false);
+  /** el turno acaba de terminar bien: la casita lo celebra un momento */
+  const [cheer, setCheer] = useState(false);
   const abort = useRef<AbortController | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -121,6 +124,12 @@ export function Chat({ profile, known, provider, conversationId, onConversation,
   useEffect(resize, [input]);
 
   useEffect(() => {
+    if (!cheer) return;
+    const t = setTimeout(() => setCheer(false), 2400);
+    return () => clearTimeout(t);
+  }, [cheer]);
+
+  useEffect(() => {
     if (!seed) return;
     setInput(seed.text);
     requestAnimationFrame(() => {
@@ -152,7 +161,9 @@ export function Chat({ profile, known, provider, conversationId, onConversation,
     setInput("");
     setImages([]);
     setNotice(null);
+    setCheer(false);
     setBusy(true);
+    let failed = false;
     const patch = (fn: (m: DisplayMsg) => DisplayMsg) => setMessages((all) => all.map((m, i) => (i === all.length - 1 ? fn(m) : m)));
     abort.current = new AbortController();
 
@@ -185,16 +196,21 @@ export function Chat({ profile, known, provider, conversationId, onConversation,
             patch((m) => ({ ...m, homes: [...m.homes.filter((h) => h.listing.title !== e.listing.title || h.listing.price !== e.listing.price), { listing: e.listing, savedId: e.savedId }] }));
             if (e.savedId) homes.reload();
           } else if (e.type === "profile") onProfileChanged();
-          else if (e.type === "error") patch((m) => ({ ...m, error: e.message }));
+          else if (e.type === "error") {
+            failed = true;
+            patch((m) => ({ ...m, error: e.message }));
+          }
         }
       }
     } catch (err) {
+      failed = true;
       if ((err as Error).name !== "AbortError") {
         const message = err instanceof TypeError ? "No hay conexión con el servidor. ¿Está arrancado?" : (err as Error).message;
         patch((m) => ({ ...m, error: message }));
       }
     } finally {
       setBusy(false);
+      if (!failed) setCheer(true);
       onTurnDone();
       box.current?.focus();
     }
@@ -232,6 +248,10 @@ export function Chat({ profile, known, provider, conversationId, onConversation,
 
   const lastUserText = [...messages].reverse().find((m) => m.role === "user")?.text;
   const empty = messages.length === 0 && !loading;
+  // cara de la casita: piensa hasta que llega texto, habla mientras escribe y celebra al terminar
+  const lastMsg = messages[messages.length - 1];
+  const mood: Mood = busy ? (lastMsg?.text ? "talking" : "thinking") : lastMsg?.error ? "worried" : cheer ? "happy" : "idle";
+  const doing = busy && lastMsg && !lastMsg.text ? `${TOOL_LABEL[lastMsg.tools[lastMsg.tools.length - 1]] ?? "Pensando"}…` : null;
 
   return (
     <section
@@ -258,9 +278,9 @@ export function Chat({ profile, known, provider, conversationId, onConversation,
         <div className="chat-column">
           {empty && (
             <div className="welcome">
-              <span className="welcome-icon" aria-hidden>
-                ⌂
-              </span>
+              <div className="hero-mascot">
+                <Mascot size={136} live />
+              </div>
               <h2>{known ? "¿Qué miramos hoy?" : "Hola, soy tu bróker"}</h2>
               <p className="muted">
                 {known
@@ -327,8 +347,8 @@ export function Chat({ profile, known, provider, conversationId, onConversation,
             const cards = m.homes.filter(firstTime);
             return (
               <div key={i} className="msg assistant">
-                <span className="avatar" aria-hidden>
-                  ⌂
+                <span className="avatar">
+                  <Mascot size={36} mood={working ? mood : m.error ? "worried" : "idle"} />
                 </span>
                 <div className="msg-body">
                   {steps.length > 0 && (
@@ -368,13 +388,24 @@ export function Chat({ profile, known, provider, conversationId, onConversation,
 
       <div className="composer-wrap">
         <div className="chat-column">
-          {notice && (
-            <p className="note composer-note">
-              {notice}
-              <button className="link" onClick={() => setNotice(null)} aria-label="Cerrar aviso">
-                Entendido
-              </button>
-            </p>
+          {(!empty || notice) && (
+            <div className={`companion${empty ? " bare" : ""}`}>
+              {!empty && <Mascot size={62} mood={mood} live />}
+              {notice ? (
+                <p className="bubble">
+                  {notice}
+                  <button className="link" onClick={() => setNotice(null)} aria-label="Cerrar aviso">
+                    Entendido
+                  </button>
+                </p>
+              ) : (
+                doing && (
+                  <p className="bubble doing" aria-live="polite">
+                    {doing}
+                  </p>
+                )
+              )}
+            </div>
           )}
           {images.length > 0 && (
             <div className="attachments">

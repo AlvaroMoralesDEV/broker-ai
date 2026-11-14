@@ -16,9 +16,12 @@ npm run typecheck    # tsc --noEmit, must be clean
 npm run up           # docker compose up -d --build  →  http://localhost:8787 (app + Postgres 16/pgvector)
 node scripts/chat.mjs [url] "msg 1" "msg 2"   # drive the chat from the terminal
 node scripts/bench-local.ts <ollama-model>    # measure a local model on real tool-calling cases
+npm run eval [case…]  # scripted conversations against the real Claude API (costs money, needs a key)
 ```
 
-Run `npm test` and `npm run typecheck` before every commit.
+Run `npm test` and `npm run typecheck` before every commit. Run `npm run eval` after changing `INSTRUCTIONS`, a tool description or the model.
+
+`docs/agent-design.md` explains how a request to Claude is built and why. Read it before touching `server/agent.ts`.
 
 ## Architecture
 
@@ -33,8 +36,8 @@ server/
   index.ts      Express API + SSE chat. Middleware wraps each /api request in withUser()
   context.ts    AsyncLocalStorage with the current user
   store.ts      all DB access; every query filters by currentUser()
-  tools.ts      the single tool registry (Claude agent, local router and MCP all use it)
-  agent.ts      Claude path (tool-use loop) and toDisplay(); dispatches to local.ts when no key
+  tools.ts      the single tool registry (Claude agent, local router and MCP all use it); runToolCalls() orders a batch
+  agent.ts      Claude path: buildRequest(), context snapshots, tool-use loop, toDisplay(); dispatches to local.ts when no key
   local.ts      local/no-AI path: deterministic router + Ollama for free-form questions only
   summaries.ts  broker answers written by code (listing verdict, offers, budget…)
   provider.ts   picks Claude, Ollama or none
@@ -48,7 +51,11 @@ src/            React UI (Vite). lib.ts adds the X-Broker-User header to every /
 - **Numbers come from code, never from a model.** Payments, taxes, budgets and offer costs are computed in `shared/`. Prompts tell Claude to use tools; local mode never lets the model produce figures.
 - **Everything is per user.** New tables need a `user_id` column, and new store functions must filter by `currentUser()`. Add an isolation test in `server/broker.test.ts`.
 - **Conversation history is append-only.** Messages are stored exactly as sent to the Claude API (including thinking blocks) and never edited. Interrupted tool calls are repaired by appending a result, not by deleting.
+- **The front of a request never changes.** The system prompt (`INSTRUCTIONS`) and the tool list carry no date, user data or per-turn text. The user's context goes into the history as a `system`-role snapshot, appended once per turn when it changed. Anything dynamic placed in the system prompt breaks the prompt cache and invalidates stored thinking blocks.
+- **Every tool declares `mutates`.** `runToolCalls()` runs writing tools first, in order, then read-only tools in parallel, so a calculation never reads data that a call in the same step is about to change.
+- **Rules that protect numbers are enforced in code, not only in the prompt.** `update_profile` rejects gross or yearly pay (`payDoubt()` in `shared/extract.ts`).
 - **Local mode is deterministic by design.** A 2B model on a CPU laptop picks the right tool but fills arguments badly, so `local.ts` routes with regexes and writes answers in `summaries.ts`. Don't hand tool calls to the local model without re-measuring with `scripts/bench-local.ts`.
+- **The agent cannot open links, and says so.** A message with only a listing URL is answered by code in `local.ts` (never by the local model, which would pretend it read it). On request it is saved with `save_home_link` as a link-only home: price 0, `isLinkOnly()` in `shared/broker.ts`. Anything that computes or compares homes must skip link-only ones. Saving a home is always asked first, unless the user asked for it in that message.
 - **Ambiguous input is asked about, not guessed.** Gross or yearly pay, or an answer about a different topic, must not be saved as a fact.
 - **Schema changes go in a new migration file**; never edit an applied one.
 - **Model:** `claude-opus-5-5` by default (`ANTHROPIC_MODEL` overrides), with server-side refusal fallback enabled.

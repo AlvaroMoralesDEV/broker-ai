@@ -6,13 +6,20 @@ You tell it your situation and it works out how much you can buy. You paste a li
 
 > The app's interface is in Spanish, since it is built for the Spanish market.
 
-![Chat with the broker](docs/chat.png)
+![Chat with the broker: a link it cannot open, saved on request](docs/chat.png)
+
+The broker has a face: a little house that follows your cursor, puffs chimney smoke while it thinks, talks while the answer streams in, hops when a turn goes well and dozes off if you leave it alone. All screenshots use made-up demo data.
 
 ## What it does
 
 - **Interview and memory.** It asks one question at a time (savings, net pay and number of payments, contract, debts, whether you buy alone), saves each answer with its date, and recalculates when something changes ("me han subido el sueldo").
 - **Listing review.** Paste the text of a listing, or a screenshot with Claude. You get the verdict, the savings needed (down payment plus regional taxes and fees), the monthly payment, the monthly cost of owning it, red flags (occupied, bare ownership, special levy, no lift…) with the sentence that triggered each one, and questions for the agency.
-- **Saved homes.** Status, notes and price history, all recalculated with your situation today.
+- **Links it can't read are said to be so.** The agent cannot open web pages. If you send only the URL of a listing, it tells you it hasn't seen it, asks for the text (or a screenshot with Claude), and offers to keep the link meanwhile. It asks before saving.
+- **Saved homes.** Status, notes and price history, all recalculated with your situation today, each with a button that opens the original listing. A home saved from a bare link shows no figures until you paste its listing, and is then completed in place.
+
+![Saved homes: one analysed, one saved as a link only](docs/homes.png)
+
+- **Memory across conversations.** With Claude, the agent keeps short notes on decisions and their reasons ("ruled out that area because of the commute") and starts every new chat with them.
 - **Bank offer comparison.** Enter each offer the banks make you (rate, fixed years, spread, fees, and every linked product with its discount and yearly cost). You get the real cost over the whole term, whether each linked product pays for itself, and the cheapest way to take each offer.
 - **Several users.** Each person has their own profile, conversations, homes and offers. You can have two people open at once, one per browser tab.
 - **MCP server** exposing the same tools to Claude Desktop or Claude Code.
@@ -44,9 +51,63 @@ docker compose
 └── db    Postgres 16 (+ pgvector, reserved for the knowledge base)
 ```
 
-- **The model reads and talks; code decides.** Every figure comes from `shared/finance.ts`, which is tested against the original spreadsheet. Red flags and offer maths are plain, tested rules, so every result can be explained.
-- **One tool registry** (`server/tools.ts`) serves the Claude agent, the local mode and the MCP server. Conversations are stored in the same format in every mode, so a chat started locally can continue with Claude.
-- **Per-user isolation.** Every request runs with its user (`AsyncLocalStorage`), and every query filters by it. Tests check that one user can neither read nor write another's data.
+### Layers
+
+```
+src/        React UI (Vite). Chat plus calculator tabs, and the mascot (Mascot.tsx). Every /api call carries X-Broker-User.
+   │  REST + Server-Sent Events
+server/
+   index.ts      Express API. Middleware wraps each request in withUser() (AsyncLocalStorage)
+   provider.ts   picks the brain: Claude if there is a key, else Ollama, else none
+   agent.ts      Claude path: builds the request, runs the tool loop, streams the answer
+   local.ts      no-Claude path: deterministic router; Ollama only for open questions
+   tools.ts      the single tool registry, used by agent.ts, local.ts and mcp.ts
+   summaries.ts  broker answers written by code (verdict, budget, offers) for local mode
+   store.ts      all database access, every query filtered by the current user
+   mcp.ts        the same tools over MCP (stdio)
+shared/     pure, tested logic used by server and browser
+   finance.ts    mortgage engine: payment, schedule, affordability, rent vs buy, savings plan…
+   taxes.ts      purchase taxes per comunidad autónoma
+   offers.ts     comparison of the offers a user received from banks
+   broker.ts     interview order, profile extras, red-flag rules for listings
+   extract.ts    regex extraction of user facts and listing fields; payDoubt()
+data/rates.json   market rates and Euribor, updated by hand
+```
+
+### How a message is handled
+
+1. The browser posts the message to `/api/chat` with the user id header. The server stores it in `messages`, exactly in Claude API format.
+2. `provider.ts` decides the mode.
+3. **Claude mode** (`agent.ts`): if the user's context (profile, saved homes, notes, date, rates age) changed since the model last saw it, a `system`-role snapshot is appended to the history. The request is fixed tools + fixed `INSTRUCTIONS` + the history. Claude answers or calls tools; `runToolCalls()` runs writing tools first, in order, then read-only tools in parallel; results go back to Claude. This repeats up to 16 steps. Text and tool activity stream to the browser over SSE, and every message is appended to the database.
+4. **Local mode** (`local.ts`): regexes decide what the message is (an interview answer, a pasted listing, a bare link, a budget question, an offers question, a greeting, an open question). The matching tool runs with arguments from `shared/extract.ts`, and `summaries.ts` writes the answer. Only open questions go to Ollama, with a glossary and the user's context, and any euro figure in its answer that isn't from the user's data is flagged.
+   After the answer, the code asks the next missing interview question, in the order set by `KEY_FACTS` in `shared/broker.ts`.
+5. **No-AI mode**: the same router and code-written answers. Open questions get a short message explaining what works without a model.
+6. Tools that change the profile return which saved homes changed verdict, so the answer can say that a saved home now fits (or no longer does) with the new salary.
+
+### Architecture decisions
+
+Each decision below solves a specific problem. [`docs/agent-design.md`](docs/agent-design.md) has the full reasoning for the Claude path.
+
+| Decision | Why |
+| --- | --- |
+| **Every figure comes from code in `shared/`.** Prompts tell Claude to use tools; local mode never lets the model produce numbers. | A model that estimates a payment or a tax is sometimes wrong and always sounds sure. A tested function is right or visibly broken, and every result can be explained. The engine is tested against the original spreadsheet. |
+| **Rules that protect numbers are enforced in code**, not only in the prompt (`payDoubt()` rejects gross or yearly pay in `update_profile`). | Saving 30,000 € gross a year as monthly net pay inflates the budget and nothing fails. A prompt rule can be ignored; a thrown error can't. |
+| **Ambiguous input is asked about, not guessed.** | Same reason: a wrong saved fact silently corrupts every later calculation. |
+| **Local mode is a deterministic router, not a small agent.** | Measured with `scripts/bench-local.ts`: a 2B model on a CPU laptop picks the right tool but fills its arguments badly. Regexes plus code-written answers are instant and correct; the model only explains concepts. |
+| **A bare link is handled by code, never by the model.** It is answered with "I can't open links" and saved, only on request, as a link-only home (price 0, `isLinkOnly()`) that is left out of every calculation. | A small model asked about a URL it cannot read answers as if it had read it, and says it saved a home that does not exist. |
+| **One tool registry** for Claude, local mode and MCP. | One place to fix a tool, and the same behaviour everywhere. Conversations share one storage format, so a chat started locally can continue with Claude. |
+| **Every tool declares `mutates`; writes run before reads.** | Claude may call `update_profile` and `evaluate_listing` in one step. Run in parallel, the evaluation could read the old salary with no error anywhere. |
+| **The system prompt and tool list never change** (no date, no user data). User context goes into the history as a `system` snapshot, only when it changed. | Anything dynamic at the front of the request breaks prompt caching for the whole conversation and invalidates stored thinking blocks. |
+| **Conversation history is append-only**, stored exactly as sent to the API, thinking blocks included. Long chats use the API's context editing instead of deleting messages. | Editing or removing a message invalidates every later thinking block and makes behaviour impossible to reproduce from the database. |
+| **Profile changes are an append-only log** (`profile_facts`) next to the current profile. | The agent can say what the user said and when, and recalculate when something changes. |
+| **Per-user isolation through `AsyncLocalStorage`.** Every store function filters by `currentUser()`; tests check isolation. | Several people can share one installation without passing a user id through every function, and a forgotten filter fails a test. |
+| **Postgres in Docker, PGlite for `npm run dev`.** Plain SQL migrations applied at startup. | Real Postgres (with pgvector for later) in the packaged app, zero setup for development, and schema changes that are reviewable SQL. |
+| **Web search limited to portals and official sources.** | Unrestricted search returns blogs that the model cites with the same confidence as the INE. |
+| **Market rates in a hand-edited file**, with a warning after 30 days. | The only sources are comparison blogs; scraping them would be fragile and against the project's no-scraping rule. A visible age is better than a silent stale number. |
+| **Runs on `127.0.0.1` only, no accounts.** | It holds personal financial data and is meant for one household's computer. Nothing leaves the machine except Claude API calls when a key is set. |
+| **Unit tests never call a model; evals do.** | `npm test` is free, fast and deterministic. `npm run eval` checks real model behaviour (what was stored, which tools ran) after prompt or model changes. |
+
+Ideas for what to build next are in [`docs/improvements.md`](docs/improvements.md). [`docs/blog-brief.md`](docs/blog-brief.md) is a brief for an AI agent writing blog posts about the project.
 
 ### Why local mode is not "Claude, but worse"
 
@@ -84,6 +145,7 @@ SELECT user_id, bank, offer FROM bank_offers;            -- offers from banks
 | `conversations` / `messages` | Chats, stored exactly as sent to the model |
 | `homes` / `home_prices` | Saved homes and their price history |
 | `bank_offers` | Mortgage offers received from banks |
+| `broker_notes` | What the agent noted to remember in later conversations |
 
 Data lives in the `broker-ia_pgdata` Docker volume and survives restarts. `docker compose down -v` deletes it.
 
@@ -103,15 +165,18 @@ Add `-e BROKER_USER=<user id>` to act as a user other than the default one (see 
 ```bash
 npm test                         # engine, extraction, offers, tools, local mode, user isolation (no model calls)
 npm run typecheck
-node scripts/chat.mjs "hola" "tengo 30.000 ahorrados"     # drive the chat from the terminal
+node scripts/chat.mjs "hola" "tengo 30.000 ahorrados" "cobro 1.800 netos en 12 pagas"     # drive the chat from the terminal
 node scripts/bench-local.ts qwen3:1.7b                   # measure a local model on this machine
+npm run eval                     # scripted conversations against the real Claude API (needs a key, costs money)
 ```
+
+[`docs/agent-design.md`](docs/agent-design.md) explains how each request to Claude is built (prompt caching, context snapshots, tool ordering, long conversations) and why. Set `BROKER_LOG_USAGE=1` to print token and cache usage for every model call.
 
 Bank rates and the Euribor live in `data/rates.json` (mounted in Docker, so edit and reload). Schema changes go in `server/migrations/`, and migrations run at startup.
 
 ## Known limitations
 
-- It does not search listings: Idealista forbids scraping and its API needs approval. You search; the agent evaluates.
+- It does not search listings or open links: Idealista forbids scraping and its API needs approval. You search and paste the listing text; the agent evaluates. A bare link can only be saved, not analysed.
 - Listing parsing and red flags are text rules tuned to Idealista text copied from the page. Unusual wording can be missed in either direction, so each flag shows its evidence and missing fields are listed.
 - The offer comparison assumes Euribor stays at today's value and that insurance costs the same every year.
 - In local mode screenshots can't be read (paste the text instead), and answers to open questions come from a 2B model: fine for concepts, weak for nuanced advice.

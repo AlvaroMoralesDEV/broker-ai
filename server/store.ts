@@ -136,7 +136,13 @@ export async function givenFields(): Promise<Set<string>> {
 
 // ---------------------------------------------------------------- conversaciones
 
-export type StoredMessage = Anthropic.Beta.BetaUserMessageParam | Anthropic.Beta.BetaAssistantMessageParam;
+/**
+ * Un mensaje guardado. Además de los del usuario y del asistente hay mensajes con rol 'system': las
+ * «fotos» del contexto (perfil, viviendas, notas) y los avisos del servidor al modelo. Se guardan en el
+ * historial, y no en el prompt de sistema, para que lo ya enviado a la API no cambie nunca.
+ */
+export type SystemMessage = { role: "system"; content: string };
+export type StoredMessage = Anthropic.Beta.BetaUserMessageParam | Anthropic.Beta.BetaAssistantMessageParam | SystemMessage;
 
 export interface ConversationSummary {
   id: string;
@@ -169,7 +175,7 @@ export async function listConversations(limit = 50): Promise<ConversationSummary
 /** Historial exacto que se reenvía a la API (los mensajes nunca se editan: solo se añaden). */
 export async function getMessages(conversationId: string): Promise<StoredMessage[]> {
   const db = await getDb();
-  const rows = await db.query<{ role: "user" | "assistant"; content: StoredMessage["content"] }>(
+  const rows = await db.query<{ role: StoredMessage["role"]; content: StoredMessage["content"] }>(
     `SELECT m.role, m.content FROM messages m JOIN conversations c ON c.id = m.conversation_id
       WHERE m.conversation_id = $1 AND c.user_id = $2 ORDER BY m.id`,
     [conversationId, currentUser()],
@@ -192,6 +198,44 @@ export async function appendMessage(conversationId: string, message: StoredMessa
 export async function deleteConversation(id: string): Promise<void> {
   const db = await getDb();
   await db.query("DELETE FROM conversations WHERE id = $1 AND user_id = $2", [id, currentUser()]);
+}
+
+// ---------------------------------------------------------------- notas del bróker
+
+export const NOTE_TOPICS = ["vivienda", "banco", "decision", "preferencia", "otro"] as const;
+export type NoteTopic = (typeof NOTE_TOPICS)[number];
+
+export interface BrokerNote {
+  id: string;
+  topic: NoteTopic | null;
+  text: string;
+  at: string;
+}
+
+/** Apunta algo que conviene recordar en futuras conversaciones (solo del usuario actual). */
+export async function addNote(note: { text: string; topic?: NoteTopic; conversationId?: string }): Promise<BrokerNote> {
+  const db = await getDb();
+  const [row] = await db.query<{ id: string | number; created_at: Date }>(
+    "INSERT INTO broker_notes (user_id, topic, note, conversation_id) VALUES ($1, $2, $3, $4) RETURNING id, created_at",
+    [currentUser(), note.topic ?? null, note.text.trim(), note.conversationId ?? null],
+  );
+  return { id: String(row.id), topic: note.topic ?? null, text: note.text.trim(), at: iso(row.created_at) };
+}
+
+/** Las notas más recientes del usuario actual, de la más nueva a la más antigua. */
+export async function listNotes(limit = 20): Promise<BrokerNote[]> {
+  const db = await getDb();
+  const rows = await db.query<{ id: string | number; topic: NoteTopic | null; note: string; created_at: Date }>(
+    "SELECT id, topic, note, created_at FROM broker_notes WHERE user_id = $1 ORDER BY id DESC LIMIT $2",
+    [currentUser(), limit],
+  );
+  return rows.map((r) => ({ id: String(r.id), topic: r.topic, text: r.note, at: iso(r.created_at) }));
+}
+
+export async function removeNote(id: string): Promise<boolean> {
+  if (!/^\d+$/.test(id)) return false;
+  const db = await getDb();
+  return (await db.query("DELETE FROM broker_notes WHERE user_id = $1 AND id = $2::bigint RETURNING id", [currentUser(), id])).length > 0;
 }
 
 // ---------------------------------------------------------------- viviendas
@@ -237,9 +281,18 @@ export async function getHome(id: string): Promise<SavedHome | null> {
   return row ? toHome(row) : null;
 }
 
+/** Id de la vivienda guardada con ese enlace (para portales sin id propio en la URL). */
+export async function homeIdByUrl(url: string | null | undefined): Promise<string | null> {
+  if (!url) return null;
+  const db = await getDb();
+  const [row] = await db.query<{ id: string }>("SELECT id FROM homes WHERE user_id = $1 AND listing->>'url' = $2 LIMIT 1", [currentUser(), url]);
+  return row?.id ?? null;
+}
+
 /**
- * Guarda una vivienda. Si ya existe (misma URL de Idealista o mismo id) la actualiza y, si el precio ha
- * cambiado, lo apunta en el histórico de precios.
+ * Guarda una vivienda. Si ya existe (misma URL o mismo id) la actualiza y, si el precio ha cambiado,
+ * lo apunta en el histórico de precios. Con precio 0 es una vivienda de la que solo se tiene el
+ * enlace (isLinkOnly): no entra en el histórico hasta que llegan sus datos.
  */
 export async function saveHome(
   listing: HomeListing,
@@ -247,7 +300,8 @@ export async function saveHome(
 ): Promise<{ home: SavedHome; created: boolean; previousPrice: number | null }> {
   const db = await getDb();
   const user = currentUser();
-  const id = homeIdFromUrl(listing.url) ?? (listing.id && (await getHome(listing.id)) ? listing.id : `manual-${randomUUID().slice(0, 8)}`);
+  const id =
+    homeIdFromUrl(listing.url) ?? (listing.id && (await getHome(listing.id)) ? listing.id : ((await homeIdByUrl(listing.url)) ?? `manual-${randomUUID().slice(0, 8)}`));
   const existing = await getHome(id);
   const data = { ...existing?.listing, ...listing, id };
   const price = Math.round(listing.price);
@@ -255,8 +309,8 @@ export async function saveHome(
   if (existing) {
     await db.query(
       `UPDATE homes SET title = $3, price = $4, listing = $5::jsonb, status = COALESCE($6, status),
-              notes = COALESCE($7, notes), updated_at = now() WHERE user_id = $1 AND id = $2`,
-      [user, id, data.title, price, JSON.stringify(data), opts.status ?? null, opts.notes ?? null],
+              notes = COALESCE($7, notes), saved_verdict = COALESCE(saved_verdict, $8), updated_at = now() WHERE user_id = $1 AND id = $2`,
+      [user, id, data.title, price, JSON.stringify(data), opts.status ?? null, opts.notes ?? null, opts.verdict ?? null],
     );
   } else {
     await db.query(
@@ -264,8 +318,9 @@ export async function saveHome(
       [user, id, data.title, price, JSON.stringify(data), opts.status ?? "interesa", opts.notes ?? null, opts.verdict ?? null],
     );
   }
-  const previousPrice = existing ? existing.listing.price : null;
-  if (!existing || previousPrice !== price) await db.query("INSERT INTO home_prices (user_id, home_id, price) VALUES ($1, $2, $3)", [user, id, price]);
+  // un precio 0 (solo enlace) no es un precio: ni se apunta ni cuenta como «precio anterior»
+  const previousPrice = existing && existing.listing.price > 0 ? existing.listing.price : null;
+  if (price > 0 && previousPrice !== price) await db.query("INSERT INTO home_prices (user_id, home_id, price) VALUES ($1, $2, $3)", [user, id, price]);
   return { home: (await getHome(id))!, created: !existing, previousPrice: previousPrice !== price ? previousPrice : null };
 }
 

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { KEY_FACTS, redFlags, type ProfileExtra } from "../shared/broker.ts";
+import { KEY_FACTS, isLinkOnly, redFlags, type ProfileExtra } from "../shared/broker.ts";
 import { affordability, analyzePurchase, maxTermYears, type Profile } from "../shared/finance.ts";
 import { CCAA_LIST, ccaaName, type CCAA } from "../shared/taxes.ts";
 import { Chat } from "./Chat.tsx";
+import { Mascot } from "./Mascot.tsx";
 import { RATES, USER, dateEs, eur, switchUser, useHomes, useOffers, useProfile, useStatus, useStored, useUsers, type HomesStore, type ProfileState } from "./lib.ts";
 import { Ofertas } from "./tabs/Ofertas.tsx";
 import { Field, Num, Stat } from "./ui.tsx";
@@ -109,7 +110,9 @@ export function App() {
         <button className="icon" onClick={() => setDrawer(drawer === "nav" ? null : "nav")} aria-label="Menú">
           ☰
         </button>
-        <strong>Bróker IA</strong>
+        <strong>
+          <Mascot size={26} /> Bróker IA
+        </strong>
         {view === "chat" ? (
           <button className="ghost small-btn" onClick={() => setDrawer(drawer === "context" ? null : "context")}>
             {me.known ? eur(budget.maxPrice) : "Mi situación"}
@@ -122,9 +125,7 @@ export function App() {
 
       <aside className="side">
         <div className="brand">
-          <span className="logo" aria-hidden>
-            ⌂
-          </span>
+          <Mascot size={46} live />
           <div>
             <h1>Bróker IA</h1>
             <p>Tu bróker hipotecario personal</p>
@@ -374,7 +375,7 @@ function Situation({ me, homes, onAsk, onView }: { me: ProfileState; homes: Home
 
   return (
     <aside className="context">
-      <section className="panel">
+      <section className={`panel${known ? " budget-card" : ""}`}>
         <h3 className="eyebrow">Tu presupuesto</h3>
         {known ? (
           <>
@@ -440,14 +441,15 @@ function Situation({ me, homes, onAsk, onView }: { me: ProfileState; homes: Home
             const l = h.listing;
             const a = analyzePurchase({ ...profile, ccaa: l.ccaa ?? profile.ccaa, newBuild: l.newDevelopment || profile.newBuild }, l.price);
             const flags = redFlags(l).length;
+            const link = isLinkOnly(l);
             return (
               <li key={h.id}>
                 <button onClick={() => onView("viviendas")} title={l.title}>
-                  <i className={`dot verdict-${a.verdict}`} aria-hidden />
+                  <i className={`dot ${link ? "pending" : `verdict-${a.verdict}`}`} aria-hidden />
                   <span>{l.title}</span>
-                  <strong>{eur(l.price)}</strong>
+                  <strong>{link ? "" : eur(l.price)}</strong>
                   <small>
-                    {eur(a.payment)}/mes{flags ? ` · ${flags} ${flags === 1 ? "alerta" : "alertas"}` : ""}
+                    {link ? "Solo el enlace, sin analizar" : `${eur(a.payment)}/mes${flags ? ` · ${flags} ${flags === 1 ? "alerta" : "alertas"}` : ""}`}
                   </small>
                 </button>
               </li>

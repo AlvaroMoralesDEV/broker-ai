@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { extractAnswer, extractFacts, looksLikeListing, numbersIn, parseListingText, parseNumberEs } from "./extract.ts";
+import { buyingWith, extractAnswer, extractFacts, looksLikeListing, numbersIn, parseListingText, parseNumberEs, payDoubt } from "./extract.ts";
 
 test("números en formato español", () => {
   assert.equal(parseNumberEs("42.000"), 42000);
@@ -101,6 +101,49 @@ test("lo que no es un anuncio no lo parece", () => {
   assert.equal(looksLikeListing("Se vende piso por 150.000 €"), true);
 });
 
+test("solo o acompañado: entiende la negación y no adivina", () => {
+  const answer = (s: string) => extractAnswer("coBuyer", s).extra.coBuyer;
+  // los tres mensajes que fallaban
+  assert.equal(answer("estoy soltero"), false);
+  assert.equal(answer("quiero decir, no tengo pareja"), false, "«pareja» negada es comprar solo");
+  assert.equal(answer("compro solo"), false);
+  // otras formas de decir solo
+  for (const s of ["soltera", "sin pareja", "yo", "solo yo", "por mi cuenta", "con nadie", "no, solo", "estoy divorciado", "no tengo novia"]) {
+    assert.equal(answer(s), false, s);
+  }
+  // acompañado
+  for (const s of ["con mi pareja", "mi novio y yo", "los dos", "con mi hermana", "compramos a medias", "no compro solo", "no, con mi mujer"]) {
+    assert.equal(answer(s), true, s);
+  }
+  // contradictorio o sin respuesta: no se guarda nada (se pregunta)
+  for (const s of ["no tengo pareja pero compro con mi hermano", "depende", "aún no lo sé", "tengo 30 años"]) {
+    assert.equal(answer(s), undefined, s);
+  }
+  // en un mensaje libre solo valen las frases claras; «solo tengo» no es «compro solo»
+  assert.equal(extractFacts("No tengo pareja, así que compro yo").extra.coBuyer, false);
+  assert.equal(extractFacts("Estoy soltera y cobro 1.800 netos").extra.coBuyer, false);
+  assert.equal(extractFacts("Solo tengo 20.000 ahorrados").extra.coBuyer, undefined);
+  assert.equal(extractFacts("Mi pareja me ha dicho que mire pisos").extra.coBuyer, undefined);
+  assert.equal(buyingWith("tengo pareja pero compro solo", "strict"), "alone");
+});
+
+test("ahorros que cambian: se da el cambio, no un total", () => {
+  const change = (s: string) => extractFacts(s);
+  assert.equal(change("réstale al ahorro 20 mil euros").savingsChange, -20000);
+  assert.equal(change("réstale al ahorro 20 mil euros").profile.savings, undefined, "20.000 no son los ahorros totales");
+  assert.equal(change("quita 5.000 de mis ahorros").savingsChange, -5000);
+  assert.equal(change("me he gastado 3.000 € de los ahorros").savingsChange, -3000);
+  assert.equal(change("súmale 4.000 a los ahorros").savingsChange, 4000);
+  assert.equal(change("tengo 2.500 € más ahorrados").savingsChange, 2500);
+  // no son cambios
+  assert.equal(change("tengo más de 20.000 ahorrados").savingsChange, undefined);
+  assert.equal(change("tengo más de 20.000 ahorrados").profile.savings, 20000);
+  assert.equal(change("Tengo 30.000 € ahorrados").savingsChange, undefined);
+  // dudoso: se pregunta el total
+  assert.equal(change("quita algo de los ahorros").doubts.length, 1);
+  assert.equal(change("resta 2.000 y suma 500 al ahorro").doubts.length, 1);
+});
+
 test("respuestas cortas a la pregunta pendiente", () => {
   assert.equal(extractAnswer("savings", "42.000").profile.savings, 42000);
   assert.deepEqual(extractAnswer("netIncome", "1900 en 14").extra, { netPay: 1900, pagas: 14 });
@@ -119,4 +162,16 @@ test("una respuesta sobre otro tema no se toma por la pendiente", () => {
   assert.deepEqual(extractAnswer("monthlyDebts", "40000").profile, {});
   assert.deepEqual(extractAnswer("savings", "¿y si pido el 90%?").profile, {});
   assert.deepEqual(extractAnswer("timeline", "¿qué es el euríbor?").extra, {});
+});
+
+test("payDoubt: para un bruto o un anual, deja pasar un neto por nómina", () => {
+  assert.match(payDoubt("cobro 30.000 brutos", { netPay: 30000 }) ?? "", /BRUTO/);
+  assert.match(payDoubt("gano 2.100 brutos al mes", { netPay: 2100 }) ?? "", /BRUTO/);
+  assert.match(payDoubt("mi sueldo son 26.000", { netPay: 26000 }) ?? "", /ANUAL/);
+  assert.match(payDoubt("gano 1.900 anuales", { netIncome: 1900 }) ?? "", /ANUAL/);
+  assert.equal(payDoubt("cobro 1.900 netos en 14 pagas", { netPay: 1900 }), null);
+  assert.equal(payDoubt("1.900 netos, que son 30.000 brutos al año en 14 pagas", { netPay: 1900 }), null);
+  assert.equal(payDoubt("cobro 2.000 al mes, 28.000 al año", { netPay: 2000 }), null);
+  // si la llamada no trae sueldo, la frase da igual
+  assert.equal(payDoubt("tengo 40.000 ahorrados y cobro 30.000 brutos", {}), null);
 });

@@ -128,6 +128,36 @@ test("el historial queda en el mismo formato que con Claude", async () => {
   assert.ok(display.every((m) => m.role === "user" || m.text.length > 0));
 });
 
+test("solo o acompañado: «estoy soltero» y «no tengo pareja» se entienden; lo que no, se pregunta", async () => {
+  // un dato ya conocido hace que vuelva a la entrevista: la pregunta pendiente es la de comprar solo o no
+  const asked = await say("Tengo contrato indefinido");
+  assert.match(asked.text, /¿Compras solo o con otra persona\?/);
+  const unclear = await say("depende de cómo vaya");
+  assert.deepEqual(unclear.tools, [], "no guarda nada que no ha entendido");
+  assert.match(unclear.text, /No me ha quedado claro/);
+  assert.equal((await store.getProfile()).extra.coBuyer, undefined);
+
+  const r = await say("no tengo pareja");
+  assert.deepEqual(r.tools, ["update_profile"]);
+  assert.equal((await store.getProfile()).extra.coBuyer, false, "«pareja» negada no es comprar en pareja");
+  assert.doesNotMatch(r.text, /otra persona/);
+});
+
+test("«réstale al ahorro 20 mil»: resta a lo guardado, no guarda 20.000", async () => {
+  const before = (await store.getProfile()).profile.savings;
+  const r = await say("réstale al ahorro 20 mil euros");
+  assert.deepEqual(r.tools, ["update_profile"]);
+  assert.equal((await store.getProfile()).profile.savings, before - 20000);
+  assert.match(r.text, /pasan de/);
+  const back = await say("súmale 20.000 a mis ahorros");
+  assert.match(back.text, /pasan de/);
+  assert.equal((await store.getProfile()).profile.savings, before);
+  // si deja un número negativo, no guarda nada
+  const tooMuch = await say(`quita ${before + 1000} € de los ahorros`);
+  assert.match(tooMuch.text, /No he podido hacerlo/);
+  assert.equal((await store.getProfile()).profile.savings, before);
+});
+
 test("si compra acompañado, pregunta el sueldo de la otra persona y lo suma", async () => {
   const before = (await store.getProfile()).profile.netIncome;
   const r = await say("Al final compro con mi pareja");

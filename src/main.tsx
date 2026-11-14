@@ -4,6 +4,7 @@ import { App } from "./App.tsx";
 import { installUserHeader } from "./lib.ts";
 import "./styles.css";
 import "./broker.css";
+import "./mascot.css";
 
 // cada llamada a /api lleva el usuario de esta pestaña
 installUserHeader();

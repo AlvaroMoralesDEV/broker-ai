@@ -73,7 +73,7 @@ export function Amortizar({ profile, price }: { profile: Profile; price: number 
               format={eur}
               series={[
                 { name: "Amortizando antes", color: "var(--accent)", values: r.balance },
-                { name: "Sin amortizar", color: "var(--warn)", values: r.baseBalance },
+                { name: "Sin amortizar", color: "var(--series-2)", values: r.baseBalance },
               ]}
             />
             <p className="muted small">

@@ -110,6 +110,18 @@ app.delete("/api/offers/:id", asyncRoute(async (req, res) => {
   res.json({ ok: await store.removeOffer(String(req.params.id)) });
 }));
 
+// ------------------------------------------------------------ notas del bróker
+
+// Lo que el agente ha apuntado para recordarlo en otras conversaciones. El usuario puede verlo y borrarlo
+// sin pasar por el modelo: es su información.
+app.get("/api/notes", asyncRoute(async (_req, res) => {
+  res.json(await store.listNotes(200));
+}));
+
+app.delete("/api/notes/:id", asyncRoute(async (req, res) => {
+  res.json({ ok: await store.removeNote(String(req.params.id)) });
+}));
+
 // ------------------------------------------------------------ perfil
 
 app.get("/api/profile", asyncRoute(async (_req, res) => {
