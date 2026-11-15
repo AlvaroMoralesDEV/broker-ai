@@ -14,8 +14,9 @@ The broker has a face: a little house that follows your cursor, puffs chimney sm
 
 - **Interview and memory.** It asks one question at a time (savings, net pay and number of payments, contract, debts, whether you buy alone), saves each answer with its date, and recalculates when something changes ("me han subido el sueldo").
 - **Listing review.** Paste the text of a listing, or a screenshot with Claude. You get the verdict, the savings needed (down payment plus regional taxes and fees), the monthly payment, the monthly cost of owning it, red flags (occupied, bare ownership, special levy, no lift…) with the sentence that triggered each one, and questions for the agency.
+- **Save a listing from the portal in one click.** Drag the «Guardar en Bróker IA» button from «Mis viviendas» to your bookmarks bar. When you are looking at a listing on Idealista, Fotocasa or any other portal, click it: your browser reads the page you already have open and sends its text to the app, which analyses the home and saves it. Nothing scrapes the portal.
 - **Links it can't read are said to be so.** The agent cannot open web pages. If you send only the URL of a listing, it tells you it hasn't seen it, asks for the text (or a screenshot with Claude), and offers to keep the link meanwhile. It asks before saving.
-- **Saved homes.** Status, notes and price history, all recalculated with your situation today, each with a button that opens the original listing. A home saved from a bare link shows no figures until you paste its listing, and is then completed in place.
+- **Saved homes.** Status, notes and price history, all recalculated with your situation today, each with a button that opens the original listing. Each card has a tag with the portal it came from (Idealista, Fotocasa…), and you can filter by portal. A red × deletes a home after asking you to confirm. The same listing is never saved twice, even if its link arrives with a different tracking query. A home saved from a bare link shows no figures until you paste its listing, and is then completed in place.
 
 ![Saved homes: one analysed, one saved as a link only](docs/homes.png)
 
@@ -87,7 +88,7 @@ data/rates.json   market rates and Euribor, updated by hand
 
 ### Architecture decisions
 
-Each decision below solves a specific problem. [`docs/agent-design.md`](docs/agent-design.md) has the full reasoning for the Claude path.
+Each decision below solves a specific problem.
 
 | Decision | Why |
 | --- | --- |
@@ -109,7 +110,6 @@ Each decision below solves a specific problem. [`docs/agent-design.md`](docs/age
 | **Runs on `127.0.0.1` only, no accounts.** | It holds personal financial data and is meant for one household's computer. Nothing leaves the machine except Claude API calls when a key is set. |
 | **Unit tests never call a model; evals do.** | `npm test` is free, fast and deterministic. `npm run eval` checks real model behaviour (what was stored, which tools ran) after prompt or model changes. |
 
-Ideas for what to build next are in [`docs/improvements.md`](docs/improvements.md). [`docs/blog-brief.md`](docs/blog-brief.md) is a brief for an AI agent writing blog posts about the project.
 
 ### Why local mode is not "Claude, but worse"
 
@@ -172,7 +172,7 @@ node scripts/bench-local.ts qwen3:1.7b                   # measure a local model
 npm run eval                     # scripted conversations against the real Claude API (needs a key, costs money)
 ```
 
-[`docs/agent-design.md`](docs/agent-design.md) explains how each request to Claude is built (prompt caching, context snapshots, tool ordering, long conversations) and why. Set `BROKER_LOG_USAGE=1` to print token and cache usage for every model call.
+Set `BROKER_LOG_USAGE=1` to print token and cache usage for every model call.
 
 Schema changes go in `server/migrations/`, and migrations run at startup.
 
@@ -198,7 +198,8 @@ In Claude Code you can also ask it to do steps 1 to 5 ("update the rates in data
 
 ## Known limitations
 
-- It does not search listings or open links: Idealista forbids scraping and its API needs approval. You search and paste the listing text; the agent evaluates. A bare link can only be saved, not analysed.
+- It does not search listings or open links: Idealista forbids scraping and its API needs approval. You search, then paste the listing text or use the «Guardar en Bróker IA» bookmark, which reads the page in your own browser; the agent evaluates. A bare link can only be saved, not analysed.
+- The bookmark works on desktop browsers only. On a phone, paste the text or save the bare link.
 - Listing parsing and red flags are text rules tuned to Idealista text copied from the page. Unusual wording can be missed in either direction, so each flag shows its evidence and missing fields are listed.
 - The offer comparison assumes Euribor stays at today's value and that insurance costs the same every year.
 - In local mode screenshots can't be read (paste the text instead), and answers to open questions come from a 2B model: fine for concepts, weak for nuanced advice.

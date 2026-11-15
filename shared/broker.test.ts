@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { homeIdFromUrl, householdMonthlyIncome, redFlags, toHomeListing } from "./broker.ts";
+import { canonicalListingUrl, homeIdFromUrl, householdMonthlyIncome, portalOf, redFlags, sameListingUrl, toHomeListing } from "./broker.ts";
 
 const listing = (description: string, extra: Partial<Parameters<typeof toHomeListing>[0]> = {}) =>
   toHomeListing({ title: "Piso en venta", price: 200000, description, ...extra });
@@ -56,4 +56,28 @@ test("toHomeListing calcula €/m² y marca el origen", () => {
   assert.equal(l.pricePerM2, 3000);
   assert.equal(l.source, "idealista");
   assert.equal(l.id, "idealista-1");
+});
+
+test("portalOf: el portal sale del enlace", () => {
+  assert.deepEqual(portalOf("https://www.idealista.com/inmueble/107654321/"), { id: "idealista", name: "Idealista" });
+  assert.equal(portalOf("https://m.idealista.com/inmueble/107654321/").id, "idealista");
+  assert.equal(portalOf("https://www.fotocasa.es/es/comprar/vivienda/madrid/123456/d").name, "Fotocasa");
+  assert.equal(portalOf("https://www.habitaclia.com/comprar-piso-x-i123.htm").name, "Habitaclia");
+  assert.equal(portalOf("https://www.pisos.com/comprar/piso-madrid-123/").name, "pisos.com");
+  assert.deepEqual(portalOf("https://www.inmobiliaria-lopez.es/piso/7"), { id: "inmobiliaria-lopez.es", name: "inmobiliaria-lopez.es" });
+  assert.equal(portalOf(null).name, "Sin enlace");
+  assert.equal(portalOf("no es un enlace").id, "sin-enlace");
+});
+
+test("canonicalListingUrl: el mismo anuncio con otra query, www o barra final es el mismo", () => {
+  const base = "https://www.fotocasa.es/es/comprar/vivienda/madrid/123456/d";
+  assert.equal(canonicalListingUrl(base), "fotocasa.es/es/comprar/vivienda/madrid/123456/d");
+  assert.equal(canonicalListingUrl(`${base}?from=list&multimedia=image#fotos`), canonicalListingUrl(base));
+  assert.equal(canonicalListingUrl("https://fotocasa.es/es/comprar/vivienda/madrid/123456/d/"), canonicalListingUrl(base));
+  assert.notEqual(canonicalListingUrl("https://www.fotocasa.es/es/comprar/vivienda/madrid/654321/d"), canonicalListingUrl(base));
+  // en una web desconocida la query se conserva: puede ser lo que identifica el anuncio
+  assert.notEqual(canonicalListingUrl("https://agencia.es/ficha?id=1"), canonicalListingUrl("https://agencia.es/ficha?id=2"));
+  assert.equal(canonicalListingUrl(undefined), null);
+  assert.ok(sameListingUrl("https://www.idealista.com/inmueble/107654321/", "https://www.idealista.com/en/inmueble/107654321/?xtmc=1"));
+  assert.ok(!sameListingUrl(null, null));
 });

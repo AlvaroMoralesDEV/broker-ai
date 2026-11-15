@@ -366,7 +366,7 @@ export const TOOLS = {
     run: async (input: ListingInput, ctx: ToolContext) => {
       const l = toHomeListing(input);
       const { analysis, flags, ownership } = evaluate(ctx.me.profile, l);
-      const savedId = homeIdFromUrl(l.url);
+      const savedId = await store.findSavedHomeId(l.url);
       const saved = savedId ? await store.getHome(savedId) : null;
       ctx.emit?.({ type: "home", listing: input, savedId: saved?.id });
       return {
@@ -414,7 +414,7 @@ export const TOOLS = {
     }),
     mutates: true,
     run: async (input: { url: string; notes?: string }, ctx: ToolContext) => {
-      const existingId = homeIdFromUrl(input.url) ?? (await store.homeIdByUrl(input.url));
+      const existingId = await store.findSavedHomeId(input.url);
       const existing = existingId ? await store.getHome(existingId) : null;
       // si ya estaba (con datos o sin ellos) no se pisa: un enlace nunca borra un anuncio analizado
       if (existing) {
@@ -631,6 +631,7 @@ export const TOOLS = {
     run: async (input: { id: string }) => ({ borrada: await store.removeNote(input.id) }),
   },
 } as const;
+
 
 export type ToolName = keyof typeof TOOLS;
 

@@ -137,3 +137,34 @@ test("enlaces de otros portales: se reconocen por la URL y cada usuario tiene lo
     assert.equal((await store.listHomes()).length, 0);
   });
 });
+
+test("el mismo anuncio con el enlace distinto no se duplica, aunque esté descartado", async () => {
+  const user = await store.createUser("Duplicados");
+  await withUser(user.id, async () => {
+    const ctx = await makeContext("chat");
+    const base = "https://www.fotocasa.es/es/comprar/vivienda/madrid-capital/ascensor/187654321/d";
+    // primero solo el enlace, como llega del móvil
+    const link = (await runTool("save_home_link", { url: `${base}?from=list` }, ctx)) as { id: string };
+    // luego el anuncio importado con el marcador: otra query y barra final
+    const piso = { title: "Piso en Chamberí", price: 320000, size: 80, url: `${base}/?multimedia=image#fotos` };
+    const evaluated = (await runTool("evaluate_listing", piso, ctx)) as { ya_guardada: { id: string } | null };
+    assert.equal(evaluated.ya_guardada?.id, link.id, "evaluate_listing la reconoce aunque no sea de Idealista");
+    const saved = (await runTool("save_home", piso, ctx)) as { id: string; nueva: boolean };
+    assert.equal(saved.id, link.id);
+    assert.equal(saved.nueva, false);
+    assert.equal((await store.listHomes()).length, 1);
+    assert.equal((await store.getHome(link.id))?.listing.price, 320000, "el enlace se completa con los datos");
+
+    // descartada y vuelta a importar: se actualiza la misma, no aparece otra
+    await store.updateHome(link.id, { status: "descartada" });
+    const again = (await runTool("save_home", { ...piso, price: 310000, url: base }, ctx)) as { id: string; nueva: boolean };
+    assert.equal(again.id, link.id);
+    assert.equal((await store.listHomes({ includeDiscarded: true })).length, 1);
+  });
+
+  // otro usuario con el mismo enlace tiene su propia vivienda
+  const other = await store.createUser("Duplicados 2");
+  await withUser(other.id, async () => {
+    assert.equal(await store.findSavedHomeId("https://www.fotocasa.es/es/comprar/vivienda/madrid-capital/ascensor/187654321/d"), null);
+  });
+});

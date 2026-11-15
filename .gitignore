@@ -24,3 +24,6 @@ backups/
 *.log
 .DS_Store
 Thumbs.db
+
+# notas para entender la app (diseño, decisiones, problemas, ideas): solo en local
+notes/

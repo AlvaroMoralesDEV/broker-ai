@@ -296,7 +296,15 @@ Si quieres que empecemos por tu presupuesto, dime «empezar».`,
       say(listingSummary(ctx.me, toHomeListing(listing)));
       if (WANTS_SAVE.test(t)) {
         const saved = await call("save_home", listing as unknown as Record<string, unknown>);
-        if (saved) say(`Guardada. Tienes ${saved.total_guardadas} en seguimiento.`);
+        if (saved) {
+          say(
+            saved.nueva
+              ? `Guardada. Tienes ${saved.total_guardadas} en seguimiento.`
+              : `Ya la tenías guardada: la he actualizado${saved.precio_anterior ? ` (antes costaba ${eur(saved.precio_anterior as number)})` : ""}, sin duplicarla.${
+                  saved.estado === "descartada" ? " Está en **Descartadas**: si vuelve a interesarte, cámbiale el estado en «Mis viviendas»." : ""
+                }`,
+          );
+        }
       } else say(`${LISTING_OFFER} Dime «guárdala» o pulsa **Guardar** en la tarjeta.`);
     }
     handled = true;
@@ -304,7 +312,7 @@ Si quieres que empecemos por tu presupuesto, dime «empezar».`,
     // Un enlace sin el anuncio: no se puede abrir, y hay que decirlo en vez de dejar que conteste el modelo.
     const url = linkIn(text)!;
     say(
-      "No puedo abrir enlaces, así que todavía no he visto ese anuncio y no sé nada de la vivienda. Para analizarla, abre la página, selecciona todo el texto (Ctrl+A), cópialo (Ctrl+C) y pégalo aquí.",
+      "No puedo abrir enlaces, así que todavía no he visto ese anuncio y no sé nada de la vivienda. Para analizarla, abre la página, selecciona todo el texto (Ctrl+A), cópialo (Ctrl+C) y pégalo aquí. Más rápido: arrastra el botón «Guardar en Bróker IA» de «Mis viviendas» a tus marcadores y púlsalo cuando estés en el anuncio.",
     );
     if (WANTS_SAVE.test(t)) await saveLink(url);
     else {

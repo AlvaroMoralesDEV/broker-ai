@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { homeIdFromUrl, redFlags, toHomeListing } from "../shared/broker.ts";
+import { redFlags, sameListingUrl, toHomeListing } from "../shared/broker.ts";
 import { TOOL_LABEL, type ChatEvent, type DisplayMsg, type HomeCardData, type ImageInput } from "../shared/chat.ts";
 import { analyzePurchase, type Profile } from "../shared/finance.ts";
 import type { HomesStore, Provider } from "./lib.ts";
@@ -72,7 +72,7 @@ interface Props {
   homes: HomesStore;
   onSimulate: (price: number) => void;
   /** texto para dejar escrito en el cuadro (desde el panel «Lo que sé de ti») */
-  seed: { text: string; n: number } | null;
+  seed: { text: string; n: number; send?: boolean; notice?: string } | null;
 }
 
 export function Chat({ profile, known, provider, conversationId, onConversation, onTurnDone, onProfileChanged, homes, onSimulate, seed }: Props) {
@@ -129,8 +129,13 @@ export function Chat({ profile, known, provider, conversationId, onConversation,
     return () => clearTimeout(t);
   }, [cheer]);
 
+  /** último seed atendido: StrictMode ejecuta los efectos dos veces y un anuncio importado se enviaría dos */
+  const seen = useRef(0);
   useEffect(() => {
-    if (!seed) return;
+    if (!seed || seen.current === seed.n) return;
+    seen.current = seed.n;
+    if (seed.notice) setNotice(seed.notice);
+    if (seed.send) return void send(seed.text);
     setInput(seed.text);
     requestAnimationFrame(() => {
       box.current?.focus();
@@ -217,9 +222,11 @@ export function Chat({ profile, known, provider, conversationId, onConversation,
   }
 
   function homeCard(card: HomeCardData, key: number) {
-    const urlId = homeIdFromUrl(card.listing.url);
     const saved = homes.homes.find(
-      (h) => h.id === card.savedId || (urlId != null && h.id === urlId) || (h.listing.title === card.listing.title && h.listing.price === Math.round(card.listing.price)),
+      (h) =>
+        h.id === card.savedId ||
+        (card.listing.url != null && sameListingUrl(h.listing.url, card.listing.url)) ||
+        (h.listing.title === card.listing.title && h.listing.price === Math.round(card.listing.price)),
     );
     const l = toHomeListing(card.listing, saved?.id ?? `card-${key}`);
     const p = { ...profile, ccaa: l.ccaa ?? profile.ccaa, newBuild: l.newDevelopment || profile.newBuild };

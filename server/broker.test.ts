@@ -1,8 +1,9 @@
 // Tests del agente sin llamar al modelo: base de datos en memoria (PGlite) y las herramientas directamente.
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { withUser } from "./context.ts";
-import { openDb, setDb, type Db } from "./db.ts";
+import { toHomeListing } from "../shared/broker.ts";
+import { currentUser, withUser } from "./context.ts";
+import { getDb, openDb, setDb, type Db } from "./db.ts";
 import * as store from "./store.ts";
 import { loadRates, makeContext, ratesWarning, runTool, runToolCalls } from "./tools.ts";
 import { CONTINUE, apiMessages, buildRequest, contextSnapshot, lastContext, searchDomains, toDisplay } from "./agent.ts";
@@ -162,6 +163,33 @@ test("cada usuario ve solo sus datos", async () => {
 
   await store.deleteUser(ana.id);
   assert.ok(!(await store.listUsers()).some((u) => u.id === ana.id));
+});
+
+test("findSavedHomeId y homeIdByUrl solo miran las viviendas del usuario actual", async () => {
+  const url = "https://www.habitaclia.com/comprar-piso-luminoso-en-gracia-barcelona-i500012345678.htm";
+  const ana = await store.createUser("Ana enlaces");
+  const id = await withUser(ana.id, async () => (await store.saveHome(toHomeListing({ title: "Piso en Gràcia", price: 300000, url: `${url}?f=1` }))).home.id);
+  await withUser(ana.id, async () => assert.equal(await store.findSavedHomeId(url), id));
+  await withUser((await store.createUser("Berta enlaces")).id, async () => {
+    assert.equal(await store.findSavedHomeId(url), null);
+    assert.equal(await store.homeIdByUrl(url), null);
+  });
+});
+
+test("cambiar el precio de una vivienda no toca otra con el mismo enlace", async () => {
+  await withUser((await store.createUser("Copias")).id, async () => {
+    const url = "https://www.fotocasa.es/es/comprar/vivienda/madrid/111222333/d";
+    const first = (await store.saveHome(toHomeListing({ title: "Copia 1", price: 200000, url }))).home;
+    // una copia de antes de evitar duplicados: mismo anuncio con otra query, guardada aparte
+    const db = await getDb();
+    await db.query("INSERT INTO homes (user_id, id, title, price, listing, status) VALUES ($1, 'manual-copia', 'Copia 2', 200000, $2::jsonb, 'interesa')", [
+      currentUser(),
+      JSON.stringify({ ...first.listing, id: "manual-copia", title: "Copia 2", url: `${url}?from=list` }),
+    ]);
+    await store.updateHome("manual-copia", { price: 190000 });
+    assert.equal((await store.getHome("manual-copia"))?.listing.price, 190000);
+    assert.equal((await store.getHome(first.id))?.listing.price, 200000);
+  });
 });
 
 test("ofertas de bancos: guardar, comparar y borrar", async () => {

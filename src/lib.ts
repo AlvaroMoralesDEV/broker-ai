@@ -82,6 +82,19 @@ export function installUserHeader() {
   };
 }
 
+/**
+ * Clave de este navegador para el marcador «Guardar en Bróker IA» (shared/importer.ts). Va dentro del
+ * marcador; una importación sin ella no se envía sola. Sin almacenamiento cambia en cada carga, así que
+ * las importaciones se quedan escritas en el cuadro para revisarlas: es lo seguro.
+ */
+export const IMPORT_TOKEN: string = (() => {
+  const saved = storageGet(localStorage, "hs.importToken");
+  if (saved) return saved;
+  const token = typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+  storageSet(localStorage, "hs.importToken", token);
+  return token;
+})();
+
 export interface User {
   id: string;
   name: string;

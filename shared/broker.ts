@@ -95,6 +95,57 @@ export function homeIdFromUrl(url: string | null | undefined): string | null {
   return m ? `idealista-${m[1]}` : null;
 }
 
+/** Portales conocidos: el id de cada anuncio va en la ruta, así que la query (?xtmc=…, ?from=list) sobra. */
+const PORTALS: { id: string; name: string; host: RegExp }[] = [
+  { id: "idealista", name: "Idealista", host: /(^|\.)idealista\.com$/ },
+  { id: "fotocasa", name: "Fotocasa", host: /(^|\.)fotocasa\.es$/ },
+  { id: "habitaclia", name: "Habitaclia", host: /(^|\.)habitaclia\.com$/ },
+  { id: "pisos", name: "pisos.com", host: /(^|\.)pisos\.com$/ },
+  { id: "milanuncios", name: "Milanuncios", host: /(^|\.)milanuncios\.com$/ },
+  { id: "yaencontre", name: "yaencontre", host: /(^|\.)yaencontre\.com$/ },
+];
+
+/**
+ * De dónde es un anuncio, por su enlace: un portal conocido, otra web (su dominio) o «Sin enlace» si
+ * se pegó solo el texto. Se calcula al pintar, así que vale también para las viviendas ya guardadas.
+ */
+export function portalOf(url: string | null | undefined): { id: string; name: string } {
+  if (!url) return { id: "sin-enlace", name: "Sin enlace" };
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^(www|m)\./, "");
+    const known = PORTALS.find((p) => p.host.test(host));
+    return known ? { id: known.id, name: known.name } : { id: host, name: host };
+  } catch {
+    return { id: "sin-enlace", name: "Sin enlace" };
+  }
+}
+
+/**
+ * Enlace normalizado para saber si dos anuncios son el mismo: sin www./m., sin la barra final y sin
+ * el fragmento. En los portales conocidos también sin la query, que solo lleva rastreo; en otras webs
+ * se conserva, porque a veces el anuncio va ahí (?id=123).
+ */
+export function canonicalListingUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url.trim());
+    const host = u.hostname.toLowerCase().replace(/^(www|m)\./, "");
+    const known = PORTALS.some((p) => p.host.test(host));
+    const path = u.pathname.replace(/\/+$/, "");
+    return `${host}${path}${known ? "" : u.search}`;
+  } catch {
+    return url.trim();
+  }
+}
+
+/** ¿Es el mismo anuncio? Mismo id de Idealista, o mismo enlace normalizado. */
+export function sameListingUrl(a: string | null | undefined, b: string | null | undefined): boolean {
+  const ia = homeIdFromUrl(a);
+  if (ia && ia === homeIdFromUrl(b)) return true;
+  const ca = canonicalListingUrl(a);
+  return ca != null && ca === canonicalListingUrl(b);
+}
+
 const norm = (s: string) =>
   s
     .toLowerCase()

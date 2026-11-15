@@ -21,7 +21,7 @@ npm run eval [case…]  # scripted conversations against the real Claude API (co
 
 Run `npm test` and `npm run typecheck` before every commit. Run `npm run eval` after changing `INSTRUCTIONS`, a tool description or the model.
 
-`docs/agent-design.md` explains how a request to Claude is built and why. Read it before touching `server/agent.ts`.
+`notes/agent-design.md` explains how a request to Claude is built and why. Read it before touching `server/agent.ts`.
 
 ## Architecture
 
@@ -32,6 +32,7 @@ shared/   pure logic, used by server and browser
   broker.ts     profile extras, KEY_FACTS (interview order), red-flag rules for listings
   extract.ts    deterministic extraction: user facts and pasted-listing fields (regex)
   offers.ts     comparison of the bank offers a user received (true cost, are linked products worth it)
+  importer.ts   «Guardar en Bróker IA» bookmarklet: builds it, reads #importar=, turns the page into a chat message
 server/
   index.ts      Express API + SSE chat. Middleware wraps each /api request in withUser()
   context.ts    AsyncLocalStorage with the current user
@@ -56,9 +57,12 @@ src/            React UI (Vite). lib.ts adds the X-Broker-User header to every /
 - **Rules that protect numbers are enforced in code, not only in the prompt.** `update_profile` rejects gross or yearly pay (`payDoubt()` in `shared/extract.ts`).
 - **Local mode is deterministic by design.** A 2B model on a CPU laptop picks the right tool but fills arguments badly, so `local.ts` routes with regexes and writes answers in `summaries.ts`. Don't hand tool calls to the local model without re-measuring with `scripts/bench-local.ts`.
 - **The agent cannot open links, and says so.** A message with only a listing URL is answered by code in `local.ts` (never by the local model, which would pretend it read it). On request it is saved with `save_home_link` as a link-only home: price 0, `isLinkOnly()` in `shared/broker.ts`. Anything that computes or compares homes must skip link-only ones. Saving a home is always asked first, unless the user asked for it in that message.
+- **"Already saved?" has one answer: `findSavedHomeId()`** (`server/store.ts`), built on `canonicalListingUrl()` / `sameListingUrl()` (`shared/broker.ts`). Never compare raw URLs, and never merge homes without a URL by title or price. The portal label and filter come from `portalOf(url)` at render time, not from a stored column.
+- **Listings are imported by the user's browser, never fetched by the server.** The «Guardar en Bróker IA» bookmarklet reads the page the user has open and hands it to the app in the URL fragment, with a per-browser key; without the key the text is left in the input box, not sent. Don't add server-side scraping. See `notes/listing-import.md`.
 - **Market offers go through `rankOffers()`** (`shared/finance.ts`): checked against the user (`requirements` in `data/rates.json`), priced without the bonus when the payroll is not met, ordered by total cost, with a Euribor +1/+2 scenario. Never sort or recommend by first payment. `data/rates.json` is edited by hand (see "Updating the bank rates" in the README); a test validates it.
 - **Ambiguous input is asked about, not guessed.** Gross or yearly pay, or an answer about a different topic, must not be saved as a fact.
 - **Schema changes go in a new migration file**; never edit an applied one.
+- **Log every issue in `notes/issues.md`.** When a real problem is found and fixed (a hallucination, a misread message, a wrong number, a broken flow), add an entry at the top: what happened (quote the conversation), why, the fix with file paths, and the test that reproduces it. Do it in the same commit as the fix. Read it before changing `shared/extract.ts`, `server/local.ts` or the prompts.
 - **Model:** `claude-opus-5-5` by default (`ANTHROPIC_MODEL` overrides), with server-side refusal fallback enabled.
 
 ## Privacy

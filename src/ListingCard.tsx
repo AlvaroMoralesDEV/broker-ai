@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { HOME_STATUSES, isLinkOnly, type HomeStatus, type RedFlag } from "../shared/broker.ts";
+import { HOME_STATUSES, isLinkOnly, portalOf, type HomeStatus, type RedFlag } from "../shared/broker.ts";
 import type { PurchaseAnalysis } from "../shared/finance.ts";
 import type { Listing } from "../shared/listings.ts";
 import { eur } from "./lib.ts";
@@ -23,10 +23,18 @@ interface Props {
   /** si se pasa y la vivienda no está guardada, muestra el botón Guardar */
   onSave?: () => void;
   onSimulate: () => void;
+  /** si se pasa, muestra la X roja de eliminar arriba a la derecha (solo en «Mis viviendas») */
+  onDelete?: () => void;
   children?: ReactNode;
 }
 
-export function ListingCard({ listing: l, analysis: a, flags = [], status, onStatus, onSave, onSimulate, children }: Props) {
+/** Etiqueta con el portal del anuncio (Idealista, Fotocasa…), sacada del enlace. */
+function PortalTag({ url }: { url: string | null | undefined }) {
+  const p = portalOf(url);
+  return <span className={`portal-tag portal-${p.id.replace(/[^a-z0-9-]/g, "-")}`}>{p.name}</span>;
+}
+
+export function ListingCard({ listing: l, analysis: a, flags = [], status, onStatus, onSave, onSimulate, onDelete, children }: Props) {
   const facts = [
     l.size ? `${l.size} m²` : null,
     l.rooms != null ? `${l.rooms} hab.` : null,
@@ -50,13 +58,24 @@ export function ListingCard({ listing: l, analysis: a, flags = [], status, onSta
       <span className="pill on">★ {status === "guardada" ? "Guardada" : STATUS_TEXT[status]}</span>
     ) : null;
 
+  const deleteButton = onDelete && (
+    <button className="card-delete" onClick={onDelete} aria-label={`Eliminar ${l.title}`} title="Eliminar">
+      {/* dibujada, no el carácter «×»: cada fuente lo coloca a una altura y nunca queda centrado */}
+      <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+        <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" fill="none" />
+      </svg>
+    </button>
+  );
+
   // Guardada solo con el enlace: no hay precio ni datos, así que no se pinta ningún número.
   if (isLinkOnly(l)) {
     return (
       <article className="card listing link-only">
+        {deleteButton}
         <div className="card-body">
           <div className="card-top">
             <span className="badge link-badge">Solo el enlace</span>
+            <PortalTag url={l.url} />
           </div>
           <h3>{l.title}</h3>
           {l.url && <p className="muted small link-url">{l.url.replace(/^https?:\/\/(www\.)?/, "")}</p>}
@@ -77,10 +96,14 @@ export function ListingCard({ listing: l, analysis: a, flags = [], status, onSta
 
   return (
     <article className={`card listing verdict-${a.verdict}`}>
+      {deleteButton}
       <div className="card-body">
         <div className="card-top">
           <strong className="price">{eur(l.price)}</strong>
-          <VerdictBadge verdict={a.verdict} />
+          <span className="card-tags">
+            <PortalTag url={l.url} />
+            <VerdictBadge verdict={a.verdict} />
+          </span>
         </div>
         <h3>{l.title}</h3>
         <p className="muted">

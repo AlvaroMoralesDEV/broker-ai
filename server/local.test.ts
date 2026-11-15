@@ -248,3 +248,34 @@ test("ofertas de bancos en modo local: comparar las apuntadas y guiar al formula
   assert.deepEqual(pasted.tools, []);
   assert.match(pasted.text, /apúntala en \*\*Ofertas de bancos\*\*/);
 });
+
+test("anuncio importado con el marcador: se analiza y se guarda en el mismo turno", async () => {
+  const { importMessage } = await import("../shared/importer.ts");
+  const msg = importMessage({
+    url: "https://www.idealista.com/inmueble/109876543/",
+    title: "Piso en venta en calle de Arganzuela, Madrid — idealista",
+    text: "Piso en venta en calle de Arganzuela\nArganzuela, Madrid\n245.000 €\n72 m² 2 hab. Planta 4ª exterior con ascensor\nComunidad 60 €/mes",
+  });
+  const before = (await store.listHomes()).length;
+  const r = await say(msg);
+  assert.deepEqual(r.tools, ["evaluate_listing", "save_home"]);
+  assert.doesNotMatch(r.text, /No puedo abrir enlaces/);
+  const homes = await store.listHomes();
+  assert.equal(homes.length, before + 1);
+  const saved = homes.find((h) => h.listing.url === "https://www.idealista.com/inmueble/109876543/");
+  assert.equal(saved?.listing.price, 245000);
+});
+
+test("importar dos veces el mismo anuncio: dice que ya estaba y no lo duplica", async () => {
+  const { importMessage } = await import("../shared/importer.ts");
+  const page = {
+    url: "https://www.fotocasa.es/es/comprar/vivienda/madrid-capital/ascensor/176543210/d?from=list",
+    title: "Piso en venta en Tetuán, Madrid",
+    text: "Piso en venta en Tetuán, Madrid\n230.000 €\n65 m² 2 hab. Planta 1ª exterior",
+  };
+  await say(importMessage(page));
+  const before = (await store.listHomes()).length;
+  const r = await say(importMessage({ ...page, url: page.url.replace("?from=list", "?multimedia=image") }));
+  assert.match(r.text, /Ya la tenías guardada/);
+  assert.equal((await store.listHomes()).length, before);
+});

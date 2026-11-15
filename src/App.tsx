@@ -4,7 +4,8 @@ import { affordability, analyzePurchase, maxTermYears, type Profile } from "../s
 import { CCAA_LIST, ccaaName, type CCAA } from "../shared/taxes.ts";
 import { Chat } from "./Chat.tsx";
 import { Mascot } from "./Mascot.tsx";
-import { RATES, USER, dateEs, eur, switchUser, useHomes, useOffers, useProfile, useStatus, useStored, useUsers, type HomesStore, type ProfileState } from "./lib.ts";
+import { importMessage, parseImportHash } from "../shared/importer.ts";
+import { IMPORT_TOKEN, RATES, USER, dateEs, eur, switchUser, useHomes, useOffers, useProfile, useStatus, useStored, useUsers, type HomesStore, type ProfileState } from "./lib.ts";
 import { Ofertas } from "./tabs/Ofertas.tsx";
 import { Field, Num, Stat } from "./ui.tsx";
 import { Simulador } from "./tabs/Simulador.tsx";
@@ -47,7 +48,7 @@ export function App() {
   const [conversationId, setConversationId] = useStored<string | null>(`hs.conversation.${USER}`, null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [drawer, setDrawer] = useState<"nav" | "context" | null>(null);
-  const [seed, setSeed] = useState<{ text: string; n: number } | null>(null);
+  const [seed, setSeed] = useState<{ text: string; n: number; send?: boolean; notice?: string } | null>(null);
 
   const budget = useMemo(() => affordability(profile), [profile]);
   const [price, setPrice] = useStored<number>("hs.price", () => budget.maxPrice || 150000);
@@ -66,6 +67,23 @@ export function App() {
   );
   useEffect(() => {
     loadConversations();
+    // anuncio que manda el marcador «Guardar en Bróker IA»: conversación nueva y al chat
+    const imported = parseImportHash(location.hash);
+    if (location.hash.startsWith("#importar=")) history.replaceState(null, "", location.pathname + location.search);
+    if (imported) {
+      const trusted = imported.token === IMPORT_TOKEN;
+      setConversationId(null);
+      setView("chat");
+      setSeed({
+        text: importMessage(imported.page),
+        n: Date.now(),
+        send: trusted,
+        notice: trusted
+          ? undefined
+          : "Este anuncio llega de un marcador que no es el de este navegador, así que no lo he enviado. Revísalo y pulsa Enviar si es tuyo, o vuelve a arrastrar el botón desde «Mis viviendas».",
+      });
+      return;
+    }
     // enlaces directos: /#viviendas, /#calc y /?c=<id de conversación>
     const fromHash = VIEWS.find((v) => v === location.hash.slice(1));
     if (fromHash) setView(fromHash);

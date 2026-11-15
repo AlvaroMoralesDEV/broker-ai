@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_PROFILE, type Profile } from "../shared/finance.ts";
-import { homeIdFromUrl, type HomeListing, type HomeStatus, type ProfileExtra, type SavedHome } from "../shared/broker.ts";
+import { canonicalListingUrl, homeIdFromUrl, type HomeListing, type HomeStatus, type ProfileExtra, type SavedHome } from "../shared/broker.ts";
 import type { ReceivedOffer } from "../shared/offers.ts";
 import { currentUser } from "./context.ts";
 import { getDb } from "./db.ts";
@@ -281,12 +281,27 @@ export async function getHome(id: string): Promise<SavedHome | null> {
   return row ? toHome(row) : null;
 }
 
-/** Id de la vivienda guardada con ese enlace (para portales sin id propio en la URL). */
+/**
+ * Id de la vivienda ya guardada con ese anuncio, aunque el enlace venga distinto: con o sin www., con
+ * la query de rastreo del portal (?xtmc=…) o con la barra final (canonicalListingUrl). Mira también las
+ * descartadas, para no duplicar una que se vuelve a importar. Solo las del usuario actual.
+ */
 export async function homeIdByUrl(url: string | null | undefined): Promise<string | null> {
-  if (!url) return null;
+  const wanted = canonicalListingUrl(url);
+  if (!wanted) return null;
   const db = await getDb();
-  const [row] = await db.query<{ id: string }>("SELECT id FROM homes WHERE user_id = $1 AND listing->>'url' = $2 LIMIT 1", [currentUser(), url]);
-  return row?.id ?? null;
+  const rows = await db.query<{ id: string; url: string }>(
+    "SELECT id, listing->>'url' AS url FROM homes WHERE user_id = $1 AND listing->>'url' IS NOT NULL ORDER BY created_at",
+    [currentUser()],
+  );
+  return rows.find((r) => canonicalListingUrl(r.url) === wanted)?.id ?? null;
+}
+
+/** Id de la vivienda guardada que es este anuncio: por el id de Idealista o por el enlace. */
+export async function findSavedHomeId(url: string | null | undefined): Promise<string | null> {
+  const idealista = homeIdFromUrl(url);
+  if (idealista && (await getHome(idealista))) return idealista;
+  return homeIdByUrl(url);
 }
 
 /**
@@ -300,8 +315,14 @@ export async function saveHome(
 ): Promise<{ home: SavedHome; created: boolean; previousPrice: number | null }> {
   const db = await getDb();
   const user = currentUser();
+  // 1) un id que ya existe manda (updateHome cambia el precio de ESA vivienda, aunque haya otra con
+  //    el mismo enlace de antes de evitar duplicados); 2) la guardada con ese anuncio, aunque el enlace
+  //    llegue con otra query; 3) una nueva
   const id =
-    homeIdFromUrl(listing.url) ?? (listing.id && (await getHome(listing.id)) ? listing.id : ((await homeIdByUrl(listing.url)) ?? `manual-${randomUUID().slice(0, 8)}`));
+    (listing.id && (await getHome(listing.id)) ? listing.id : null) ??
+    (await findSavedHomeId(listing.url)) ??
+    homeIdFromUrl(listing.url) ??
+    `manual-${randomUUID().slice(0, 8)}`;
   const existing = await getHome(id);
   const data = { ...existing?.listing, ...listing, id };
   const price = Math.round(listing.price);
@@ -372,3 +393,4 @@ export async function removeOffer(id: string): Promise<boolean> {
   const db = await getDb();
   return (await db.query("DELETE FROM bank_offers WHERE user_id = $1 AND id = $2 RETURNING id", [currentUser(), id])).length > 0;
 }
+
