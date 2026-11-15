@@ -1,4 +1,7 @@
-# docker compose up --build   →   http://localhost:8787
+# docker compose up --build   →   http://broker-ia.local (o http://localhost:8787)
+#
+# El proxy también lleva http://finanzas.local a la app de Finanzas (repositorio aparte, en :8788).
+# Los nombres van en el archivo hosts: 127.0.0.1 broker-ia.local finanzas.local
 #
 # Lee ANTHROPIC_API_KEY (y opcionalmente ANTHROPIC_MODEL, POSTGRES_PASSWORD) del archivo .env.
 # Los puertos solo escuchan en 127.0.0.1: nada queda expuesto fuera de tu ordenador.
@@ -34,6 +37,10 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-auto}
       OLLAMA_HOST: ${OLLAMA_HOST_DOCKER:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-}
+      # app de Finanzas (otro compose, en :8788 del ordenador): el bróker solo lee el objetivo de vivienda,
+      # con un token que crea el usuario. Si Finanzas está parada, el bróker sigue con lo último que leyó.
+      FINANCE_URL: ${FINANCE_URL_DOCKER:-http://host.docker.internal:8788}
+      FINANCE_PUBLIC_URL: ${FINANCE_PUBLIC_URL:-http://finanzas.local}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -44,6 +51,20 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
+
+  # Nombres en vez de puertos: http://broker-ia.local → app, http://finanzas.local → Finanzas (:8788).
+  # Solo en 127.0.0.1 y solo HTTP (Caddyfile). Los nombres van en el archivo hosts.
+  proxy:
+    image: caddy:2.10-alpine
+    ports:
+      - "127.0.0.1:80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - app
     restart: unless-stopped
 
 volumes:

@@ -7,7 +7,8 @@ import type { ReceivedOffer } from "../shared/offers.ts";
 import { currentUser } from "./context.ts";
 import { getDb } from "./db.ts";
 
-export type Source = "chat" | "form" | "mcp";
+/** De dónde viene un cambio del perfil. «finanzas»: sincronizado desde la app de Finanzas. */
+export type Source = "chat" | "form" | "mcp" | "finanzas";
 
 const iso = (d: unknown) => (d instanceof Date ? d.toISOString() : String(d));
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);

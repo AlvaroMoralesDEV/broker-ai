@@ -11,6 +11,7 @@ import { CCAA_IDS } from "../shared/taxes.ts";
 import { describeError, runAgent, toDisplay } from "./agent.ts";
 import { DEFAULT_USER, withUser } from "./context.ts";
 import { getDb } from "./db.ts";
+import { financeWebUrl, link as linkFinance, savingsBlock, setMode as setFinanceMode, syncFinance, unlink as unlinkFinance } from "./finance-link.ts";
 import { resolveProvider } from "./provider.ts";
 import * as store from "./store.ts";
 import { loadRates } from "./tools.ts";
@@ -125,6 +126,8 @@ app.delete("/api/notes/:id", asyncRoute(async (req, res) => {
 // ------------------------------------------------------------ perfil
 
 app.get("/api/profile", asyncRoute(async (_req, res) => {
+  // con la app de Finanzas conectada, los ahorros se ponen al día al abrir la web
+  await syncFinance().catch(() => {});
   const given = await store.givenFields();
   res.json({
     ...(await store.getProfile()),
@@ -176,8 +179,42 @@ const extraPatch = z
 app.patch("/api/profile", asyncRoute(async (req, res) => {
   const parsed = z.object({ profile: profilePatch.default({}), extra: extraPatch.default({}) }).safeParse(req.body);
   if (!parsed.success) return void res.status(400).json({ error: "Perfil no válido" });
-  const updated = await store.updateProfile(parsed.data.profile, parsed.data.extra, { source: "form" });
-  res.json(updated);
+  // Finanzas manda también en el formulario: unos ahorros que no cuadran no se guardan (lo demás sí)
+  const { savings, ...rest } = parsed.data.profile;
+  const blocked = savings != null ? await savingsBlock({ total: savings }) : null;
+  const updated = await store.updateProfile(blocked ? rest : parsed.data.profile, parsed.data.extra, { source: "form" });
+  res.json({ ...updated, ...(blocked ? { warning: blocked } : {}) });
+}));
+
+// ------------------------------------------------------------ app de Finanzas (solo el objetivo de vivienda)
+
+app.get("/api/finance-link", asyncRoute(async (_req, res) => {
+  res.json({ ...(await syncFinance()), url: financeWebUrl() });
+}));
+
+app.put("/api/finance-link", asyncRoute(async (req, res) => {
+  const parsed = z.object({ token: z.string().trim().min(1).max(200) }).safeParse(req.body);
+  if (!parsed.success) return void res.status(400).json({ error: "Pega el token de Finanzas." });
+  try {
+    res.json(await linkFinance(parsed.data.token));
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+}));
+
+app.patch("/api/finance-link", asyncRoute(async (req, res) => {
+  const parsed = z.object({ mode: z.enum(["finanzas", "manual"]) }).safeParse(req.body);
+  if (!parsed.success) return void res.status(400).json({ error: "Modo no válido." });
+  try {
+    res.json(await setFinanceMode(parsed.data.mode));
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+}));
+
+app.delete("/api/finance-link", asyncRoute(async (_req, res) => {
+  await unlinkFinance();
+  res.json({ ok: true });
 }));
 
 // ------------------------------------------------------------ viviendas

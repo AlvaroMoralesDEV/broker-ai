@@ -8,6 +8,7 @@ import { asksToChangeAmount, extractAnswer, extractFacts, looksLikeListing, norm
 import { ollama, type ProviderInfo } from "./provider.ts";
 import * as store from "./store.ts";
 import { GLOSSARY, bankOffersSummary, budgetLine, eur, factsSummary, homesSummary, listingSummary, offersSummary } from "./summaries.ts";
+import { savingsBlock } from "./finance-link.ts";
 import { makeContext, runTool, type ToolContext } from "./tools.ts";
 
 type Msg = store.StoredMessage;
@@ -288,6 +289,25 @@ Si quieres que empecemos por tu presupuesto, dime «empezar».`,
     handled = justGreeted = true;
   }
 
+  // «ignora la app de finanzas» / «vuelve a usar la app de finanzas»: de dónde salen los ahorros
+  // Solo con una orden explícita sobre la app y nunca en una pregunta: «¿la app de finanzas usa mis
+  // movimientos?» o «mira lo que tengo en finanzas» no cambian de dónde salen los ahorros.
+  if (!handled && /\bfinanzas\b/.test(t) && !t.includes("?")) {
+    const ignore = /\b(ignora|no hagas caso a|deja de usar|pasa de)\s+(la\s+)?(app\s+de\s+)?finanzas\b/.test(t);
+    const use = !ignore && /\b(vuelve a usar|usa|haz caso a)\s+(otra vez\s+)?(la\s+)?(app\s+de\s+)?finanzas\b(\s+otra vez)?\s*[.!]*$/.test(t);
+    if (ignore || use) {
+      const out = await call("set_savings_source", { source: ignore ? "manual" : "finanzas", note: text.slice(0, 500) });
+      if (out) {
+        say(
+          ignore
+            ? "Hecho: ignoro la app de Finanzas para tus ahorros. A partir de ahora apunto la cifra que me digas. Cuando quieras volver, dime «vuelve a usar la app de finanzas»."
+            : `Hecho: tus ahorros vuelven a salir de la app de Finanzas: **${eur(ctx.me.profile.savings)}**. ${budgetLine(ctx.me.profile)}`,
+        );
+      }
+      handled = true;
+    }
+  }
+
   if (!handled && looksLikeListing(text)) {
     const listing = parseListingText(text)!;
     // pega el texto del anuncio cuyo enlace mandó antes: es la misma vivienda
@@ -345,7 +365,18 @@ Si quieres que empecemos por tu presupuesto, dime «empezar».`,
       facts.profile = { ...answer.profile, ...facts.profile };
       facts.extra = { ...answer.extra, ...facts.extra };
     }
-    const fields = { ...facts.profile, ...facts.extra };
+    const fields: Record<string, unknown> = { ...facts.profile, ...facts.extra };
+    // Finanzas manda: si la cifra no cuadra con la app de Finanzas se dice y no se guarda (lo demás sí)
+    const blocked =
+      fields.savings != null || facts.savingsChange != null
+        ? await savingsBlock(facts.savingsChange != null ? { delta: facts.savingsChange } : { total: fields.savings as number })
+        : null;
+    if (blocked) {
+      say(blocked);
+      delete fields.savings;
+      facts.savingsChange = undefined;
+      handled = true;
+    }
     if (Object.keys(fields).length || facts.savingsChange != null) {
       const before = ctx.me;
       const out = await call("update_profile", { note: text.slice(0, 500), ...fields, ...(facts.savingsChange != null ? { savingsChange: facts.savingsChange } : {}) });

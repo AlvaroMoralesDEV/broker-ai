@@ -3,6 +3,7 @@ import { KEY_FACTS, isLinkOnly, redFlags, type ProfileExtra } from "../shared/br
 import { affordability, analyzePurchase, maxTermYears, type Profile } from "../shared/finance.ts";
 import { CCAA_LIST, ccaaName, type CCAA } from "../shared/taxes.ts";
 import { Chat } from "./Chat.tsx";
+import { FinanceLinkPanel } from "./FinanceLink.tsx";
 import { Mascot } from "./Mascot.tsx";
 import { importMessage, parseImportHash } from "../shared/importer.ts";
 import { IMPORT_TOKEN, RATES, USER, dateEs, eur, switchUser, useHomes, useOffers, useProfile, useStatus, useStored, useUsers, type HomesStore, type ProfileState } from "./lib.ts";
@@ -226,6 +227,7 @@ export function App() {
                 {me.known === false && (
                   <p className="note warn">Aún no has dado tus datos: cuéntaselos a tu bróker o rellénalos aquí. Mientras, los números usan un perfil de ejemplo.</p>
                 )}
+                {me.warning && <p className="note warn small">{me.warning}</p>}
                 <ProfileForm profile={profile} update={update} maxYears={maxTermYears(profile.age)} />
               </aside>
               <div>
@@ -263,7 +265,7 @@ export function App() {
         )}
       </main>
 
-      {view === "chat" && <Situation me={me} homes={homes} onAsk={ask} onView={go} />}
+      {view === "chat" && <Situation me={me} homes={homes} onAsk={ask} onView={go} onProfileChanged={me.reload} />}
     </div>
   );
 }
@@ -385,7 +387,20 @@ function factValue(key: string, p: Profile, e: ProfileExtra): string {
 }
 
 /** Panel derecho del chat: tu presupuesto, lo que el bróker sabe de ti y tus viviendas. Se actualiza en vivo. */
-function Situation({ me, homes, onAsk, onView }: { me: ProfileState; homes: HomesStore; onAsk: (text: string) => void; onView: (v: View) => void }) {
+function Situation({
+  me,
+  homes,
+  onAsk,
+  onView,
+  onProfileChanged,
+}: {
+  me: ProfileState;
+  homes: HomesStore;
+  onAsk: (text: string) => void;
+  onView: (v: View) => void;
+  /** los ahorros cambian al conectar o desconectar Finanzas */
+  onProfileChanged: () => void;
+}) {
   const { profile, extra, known, missing } = me;
   const budget = affordability(profile);
   const knownCount = known ? KEY_FACTS.length - missing.length : 0;
@@ -443,6 +458,8 @@ function Situation({ me, homes, onAsk, onView }: { me: ProfileState; homes: Home
           Editar a mano
         </button>
       </section>
+
+      <FinanceLinkPanel onChanged={onProfileChanged} />
 
       <section className="panel">
         <div className="panel-head">

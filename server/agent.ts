@@ -1,6 +1,6 @@
 // El agente bróker: Claude con herramientas propias, memoria en base de datos y entrevista inicial.
 //
-// Cómo se construye cada petición a la API (el porqué de cada punto está en docs/agent-design.md):
+// Cómo se construye cada petición a la API (el porqué de cada punto está en notes/agent-design.md):
 //   · tools + system  → fijos. No llevan fecha ni datos del usuario, así que se leen de la caché.
 //   · messages        → el historial guardado, que solo crece. El contexto del usuario (perfil,
 //                       viviendas, notas, fecha) entra como mensajes 'system' DENTRO del historial.
@@ -10,6 +10,7 @@ import { z } from "zod";
 import { isLinkOnly, linkListing, missingKeyFacts } from "../shared/broker.ts";
 import type { ChatEvent, DisplayMsg, ImageInput } from "../shared/chat.ts";
 import { ccaaName } from "../shared/taxes.ts";
+import { contextLine, getLink, syncFinance } from "./finance-link.ts";
 import { runLocal } from "./local.ts";
 import { CLAUDE_MODEL as MODEL, resolveProvider } from "./provider.ts";
 import * as store from "./store.ts";
@@ -127,6 +128,7 @@ export async function contextSnapshot(now = new Date()): Promise<string> {
       : "Perfil: AÚN NO GUARDADO. Empieza por la entrevista.",
     missing.length ? `Datos clave que aún no te ha dado: ${missing.join("; ")}.` : "Tienes todos los datos clave.",
     `Viviendas guardadas: ${homes.length}${homes.length ? ` (${homes.map((h) => `${h.listing.title}, ${isLinkOnly(h.listing) ? "solo el enlace, sin datos" : `${h.listing.price} €`}, ${h.status}`).join(" | ")})` : ""}.`,
+    ...[contextLine(await getLink())].filter((l): l is string => l != null),
     notes.length ? `Tus notas de otras conversaciones (id · fecha · nota):\n${notes.map((n) => `- ${n.id} · ${n.at.slice(0, 10)} · ${n.text}`).join("\n")}` : "Aún no has apuntado notas.",
     "</contexto_actual>",
   ];
@@ -250,6 +252,8 @@ export interface AgentHooks {
 /** Un turno del agente con el mejor cerebro disponible: Claude, modelo local o solo el enrutador. */
 export async function runAgent(conversationId: string, turn: UserTurn, emit: (e: ChatEvent) => void, signal: AbortSignal, hooks: AgentHooks = {}): Promise<void> {
   const provider = await resolveProvider();
+  // los ahorros de la app de Finanzas, al día antes de contestar (sin enlace no hace nada; nunca bloquea)
+  await syncFinance().catch(() => {});
   const repair = danglingToolResults(await store.getMessages(conversationId));
   if (repair) await store.appendMessage(conversationId, repair);
   if (provider.kind === "anthropic") return runClaude(conversationId, turn, emit, signal, hooks);

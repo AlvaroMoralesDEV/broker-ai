@@ -32,7 +32,7 @@ The broker has a face: a little house that follows your cursor, puffs chimney sm
 
 ```bash
 git clone <this repo> && cd <repo>
-docker compose up -d --build      # http://localhost:8787
+docker compose up -d --build      # http://localhost:8787, or http://broker-ia.local (see below)
 ```
 
 No API key is required. The agent picks the best "brain" available:
@@ -44,6 +44,30 @@ No API key is required. The agent picks the best "brain" available:
 | **No AI** | Neither | Interview, listing review, saving, comparing homes and offers all still work |
 
 Without Docker: `npm install && npm run dev` (web on http://localhost:5173), using an embedded Postgres in `data/pglite`.
+
+## Savings from a personal-finance app (optional)
+
+The broker can take your savings from **Finanzas**, a separate personal-finance app (its own repository, server and database) that runs on `:8788`.
+
+1. In Finanzas, create a share token.
+2. Paste it in the broker: «Lo que sé de ti» → «Ahorros desde Finanzas».
+
+From then on:
+
+- **What it reads.** The broker reads only the housing goal: the amount set aside for it, its target, the monthly contribution and the date. Never accounts or movements.
+- **When.** It updates your savings before each answer.
+- **If you give another figure,** it tells you it doesn't match and doesn't save it, unless you say «ignora la app de finanzas». «vuelve a usar la app de finanzas» switches back.
+- **If Finanzas is stopped,** the broker keeps working with the last value it read.
+
+The shape of what crosses is fixed in `server/finance-contract.ts`. Without a link, the broker works exactly as before.
+
+### Names instead of ports
+
+`docker compose up` also starts a small proxy on `127.0.0.1:80`. With this line in your `hosts` file (`C:\Windows\System32\drivers\etc\hosts` on Windows, `/etc/hosts` elsewhere), the broker opens at http://broker-ia.local and Finanzas at http://finanzas.local:
+
+```
+127.0.0.1 broker-ia.local finanzas.local
+```
 
 ## How it is built
 
@@ -165,7 +189,7 @@ Add `-e BROKER_USER=<user id>` to act as a user other than the default one (see 
 ## Development
 
 ```bash
-npm test                         # engine, extraction, offers, tools, local mode, user isolation (no model calls)
+npm test                         # engine, extraction, offers, tools, local mode, user isolation, the Finanzas link (no model calls)
 npm run typecheck
 node scripts/chat.mjs "hola" "tengo 30.000 ahorrados" "cobro 1.800 netos en 12 pagas"     # drive the chat from the terminal
 node scripts/bench-local.ts qwen3:1.7b                   # measure a local model on this machine

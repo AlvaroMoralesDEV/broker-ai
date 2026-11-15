@@ -4,6 +4,7 @@ import { after, before, test } from "node:test";
 import { toHomeListing } from "../shared/broker.ts";
 import { currentUser, withUser } from "./context.ts";
 import { getDb, openDb, setDb, type Db } from "./db.ts";
+import { getLink, savingsBlock } from "./finance-link.ts";
 import * as store from "./store.ts";
 import { loadRates, makeContext, ratesWarning, runTool, runToolCalls } from "./tools.ts";
 import { CONTINUE, apiMessages, buildRequest, contextSnapshot, lastContext, searchDomains, toDisplay } from "./agent.ts";
@@ -173,6 +174,23 @@ test("findSavedHomeId y homeIdByUrl solo miran las viviendas del usuario actual"
   await withUser((await store.createUser("Berta enlaces")).id, async () => {
     assert.equal(await store.findSavedHomeId(url), null);
     assert.equal(await store.homeIdByUrl(url), null);
+  });
+});
+
+test("el enlace con Finanzas es de cada usuario: otro no lo ve ni le aplica la regla", async () => {
+  const ana = await store.createUser("Ana finanzas");
+  const berta = await store.createUser("Berta finanzas");
+  await db.query(
+    "INSERT INTO finance_links (user_id, token, mode, goal, saved, target, finance_date) VALUES ($1, 'fin_xxxxxxxxxxxxxxxxxxxxxxxx', 'finanzas', 'Compra de vivienda', 10000, 60000, '2026-11-15')",
+    [ana.id],
+  );
+  await withUser(ana.id, async () => {
+    assert.equal((await getLink()).linked, true);
+    assert.match((await savingsBlock({ total: 35000 }))!, /no cuadra/);
+  });
+  await withUser(berta.id, async () => {
+    assert.equal((await getLink()).linked, false);
+    assert.equal(await savingsBlock({ total: 35000 }), null);
   });
 });
 

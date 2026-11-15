@@ -197,6 +197,8 @@ export interface ProfileState {
  */
 export function useProfile() {
   const [state, setState] = useState<ProfileState>({ profile: DEFAULT_PROFILE, extra: {}, known: null, missing: [] });
+  /** aviso del servidor al guardar (p. ej. unos ahorros que no cuadran con la app de Finanzas) */
+  const [warning, setWarning] = useState<string | null>(null);
   const pending = useRef<Partial<Profile>>({});
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -222,10 +224,14 @@ export function useProfile() {
     timer.current = setTimeout(() => {
       const body = { profile: pending.current };
       pending.current = {};
-      fetch("/api/profile", json("PATCH", body)).then(reload).catch(() => {});
+      fetch("/api/profile", json("PATCH", body))
+        .then((r) => r.json())
+        .then((d: { warning?: string }) => setWarning(d?.warning ?? null))
+        .then(reload)
+        .catch(() => {});
     }, 800);
   };
-  return { ...state, update, reload };
+  return { ...state, update, reload, warning };
 }
 
 /** Viviendas guardadas: las usan el chat (tarjetas), el panel lateral y «Mis viviendas». */

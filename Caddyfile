@@ -1,0 +1,16 @@
+# Proxy local: cada app con su nombre (archivo hosts: 127.0.0.1 broker-ia.local finanzas.local).
+# Solo HTTP: con «http://» delante Caddy no intenta sacar certificados para estos nombres.
+{
+	auto_https off
+	admin off
+}
+
+http://broker-ia.local {
+	reverse_proxy app:8787
+}
+
+# Finanzas es otro proyecto de Docker (repositorio «finanzas»), publicado en 127.0.0.1:8788.
+# Caddy conserva el Host (finanzas.local), que Finanzas acepta con FINANCE_ORIGINS.
+http://finanzas.local {
+	reverse_proxy host.docker.internal:8788
+}

@@ -22,6 +22,7 @@ import {
 import { OFFER_TYPES, compareOffers, offerDefaults, type ReceivedOffer } from "../shared/offers.ts";
 import { payDoubt, savingsChangeIn } from "../shared/extract.ts";
 import { CCAA_IDS, ccaaName } from "../shared/taxes.ts";
+import { getLink, savingsBlock, setMode } from "./finance-link.ts";
 import * as store from "./store.ts";
 
 export interface RatesFile {
@@ -220,6 +221,7 @@ export const TOOLS = {
         datos_que_faltan: await missingFacts(),
         ultimos_cambios: (await store.profileHistory(12)).map((f) => ({ campo: f.field, antes: f.oldValue, ahora: f.newValue, lo_que_dijo: f.note, fecha: f.at.slice(0, 10) })),
         notas: (await store.listNotes(30)).map(noteLine),
+        ahorros_desde_finanzas: await financeOut(),
       };
     },
   },
@@ -271,7 +273,17 @@ export const TOOLS = {
           throw new Error("No se ha guardado nada de esta llamada. El usuario dice cuánto CAMBIAN sus ahorros, no el total: vuelve a llamar con savingsChange (negativo si resta) y sin savings.");
         }
       }
-      if (savingsChange != null) {
+      // Finanzas manda: una cifra de ahorros que no cuadra con la app de Finanzas no se guarda
+      let savingsBlocked: string | null = null;
+      if (fields.savings != null || savingsChange != null) {
+        savingsBlocked = await savingsBlock(savingsChange != null ? { delta: savingsChange } : { total: fields.savings as number });
+        if (savingsBlocked) {
+          delete fields.savings;
+          const others = Object.values(fields).some((v) => v !== undefined);
+          if (!others) throw new Error(savingsBlocked);
+        }
+      }
+      if (savingsChange != null && !savingsBlocked) {
         if (fields.savings != null) throw new Error("No se ha guardado nada: pasa savings (total) o savingsChange (cambio), no los dos.");
         if (!(await store.givenFields()).has("savings")) {
           throw new Error("No se ha guardado nada: aún no hay ahorros apuntados a los que sumar o restar. Pregúntale cuánto tiene ahorrado en total.");
@@ -316,7 +328,8 @@ export const TOOLS = {
       if (fields.coBuyerNetPay != null && after.extra.coBuyerPagas == null) avisos.push("Falta el número de pagas de la otra persona: se han supuesto 12. Pregúntalo.");
       return {
         campos_cambiados: after.changed,
-        ...(savingsChange != null ? { ahorros_antes: before.profile.savings, ahorros_ahora: after.profile.savings } : {}),
+        ...(savingsBlocked ? { ahorros_no_guardados: savingsBlocked } : {}),
+        ...(savingsChange != null && !savingsBlocked ? { ahorros_antes: before.profile.savings, ahorros_ahora: after.profile.savings } : {}),
         avisos,
         ingresos_netos_mensuales: after.profile.netIncome,
         presupuesto_antes: before.known ? budgetOf(before.profile) : null,
@@ -624,6 +637,22 @@ export const TOOLS = {
     },
   },
 
+  set_savings_source: {
+    description:
+      "De dónde salen los ahorros del usuario cuando tiene conectada la app de Finanzas. 'manual': SOLO si el usuario pide expresamente ignorar la app de Finanzas («ignora la app de finanzas», «usa lo que te digo yo»); a partir de ahí update_profile guarda la cifra que diga. 'finanzas': si pide volver a usarla; los ahorros vuelven a ser los de Finanzas.",
+    schema: z.object({
+      source: z.enum(["finanzas", "manual"]),
+      note: z.string().max(500).describe("Lo que ha dicho el usuario, con sus palabras"),
+    }),
+    mutates: true,
+    run: async (input: { source: "finanzas" | "manual"; note: string }, ctx: ToolContext) => {
+      await setMode(input.source);
+      ctx.me = await store.getProfile();
+      ctx.emit?.({ type: "profile", profile: ctx.me.profile, extra: ctx.me.extra });
+      return { ...(await financeOut()), ahorros_en_el_perfil: ctx.me.profile.savings };
+    },
+  },
+
   remove_note: {
     description: "Borra una nota del bróker que ya no vale o que el usuario pide olvidar (por id; los ids están en el contexto y en get_profile).",
     schema: z.object({ id: z.string().regex(/^\d+$/) }),
@@ -634,6 +663,18 @@ export const TOOLS = {
 
 
 export type ToolName = keyof typeof TOOLS;
+
+/** Lo que el agente sabe del enlace con Finanzas: solo el objetivo de vivienda. */
+async function financeOut() {
+  const l = await getLink();
+  if (!l.linked) return { conectada: false };
+  return {
+    conectada: true,
+    manda: l.mode === "finanzas",
+    objetivo: l.share,
+    error_ultima_lectura: l.error,
+  };
+}
 
 /** Ejecuta una herramienta validando la entrada. Lanza un Error con un mensaje legible si algo falla. */
 export async function runTool(name: string, input: unknown, ctx: ToolContext): Promise<unknown> {

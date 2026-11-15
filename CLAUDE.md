@@ -6,6 +6,8 @@ Guidance for Claude Code when working in this repository.
 
 Bróker IA: a local, multi-user AI agent that acts as a personal mortgage and property broker in Spain. The user tells it about their finances, pastes property listings, and enters the mortgage offers banks give them. The agent keeps all of that in Postgres and recalculates everything when their situation changes. The UI and all user-facing text are in Spanish; code comments are in Spanish too.
 
+**Finanzas** is a separate personal-finance app in its own repository (`../finanzas`), with its own server (:8788), database, login and web. It shares only the housing goal with the broker, through a token the user creates. Its `docs/architecture.md` explains the link; read it before touching `server/finance-link.ts`.
+
 ## Commands
 
 ```bash
@@ -13,7 +15,7 @@ npm install
 npm run dev          # API on :8787 (tsx watch) + Vite on :5173; uses embedded PGlite in data/pglite
 npm test             # node:test over shared/*.test.ts and server/*.test.ts; in-memory DB, no model calls
 npm run typecheck    # tsc --noEmit, must be clean
-npm run up           # docker compose up -d --build  →  http://localhost:8787 (app + Postgres 16/pgvector)
+npm run up           # docker compose up -d --build  →  http://localhost:8787 or http://broker-ia.local (app + Postgres 16/pgvector + Caddy proxy)
 node scripts/chat.mjs [url] "msg 1" "msg 2"   # drive the chat from the terminal
 node scripts/bench-local.ts <ollama-model>    # measure a local model on real tool-calling cases
 npm run eval [case…]  # scripted conversations against the real Claude API (costs money, needs a key)
@@ -44,7 +46,10 @@ server/
   provider.ts   picks Claude, Ollama or none
   mcp.ts        stdio MCP server over the same tools (BROKER_USER selects the user)
   migrations/   plain SQL, applied in order at startup
+  finance-link.ts  broker side of the Finanzas link: token, sync before each turn, savingsBlock() («Finanzas manda»)
+  finance-contract.ts  copy of Finanzas' contract (+ .fixture.json, identical in both repos); finance-link.test.ts runs against a fake Finanzas
 src/            React UI (Vite). lib.ts adds the X-Broker-User header to every /api call
+Caddyfile       local proxy: broker-ia.local → app, finanzas.local → host :8788
 ```
 
 ## Rules that matter
@@ -58,6 +63,9 @@ src/            React UI (Vite). lib.ts adds the X-Broker-User header to every /
 - **Local mode is deterministic by design.** A 2B model on a CPU laptop picks the right tool but fills arguments badly, so `local.ts` routes with regexes and writes answers in `summaries.ts`. Don't hand tool calls to the local model without re-measuring with `scripts/bench-local.ts`.
 - **The agent cannot open links, and says so.** A message with only a listing URL is answered by code in `local.ts` (never by the local model, which would pretend it read it). On request it is saved with `save_home_link` as a link-only home: price 0, `isLinkOnly()` in `shared/broker.ts`. Anything that computes or compares homes must skip link-only ones. Saving a home is always asked first, unless the user asked for it in that message.
 - **"Already saved?" has one answer: `findSavedHomeId()`** (`server/store.ts`), built on `canonicalListingUrl()` / `sameListingUrl()` (`shared/broker.ts`). Never compare raw URLs, and never merge homes without a URL by title or price. The portal label and filter come from `portalOf(url)` at render time, not from a stored column.
+- **Finanzas is a separate repository.** The only thing shared is the contract: `server/finance-contract.ts` and `server/finance-contract.fixture.json`, copies of the files in Finanzas. Change them in both repositories together, and bump the route version.
+- **What the broker may know from Finanzas: the housing goal only.** That is the goal's name, the amount saved for it, its target, the monthly contribution and the update date. Never balances, movements, payroll or subscriptions, in tools, context or MCP.
+- **Finanzas wins on savings.** While a broker user is linked and has not said «ignora la app de finanzas», `savingsBlock()` stops any other savings figure, in `update_profile` (Claude, local mode, MCP) and in `PATCH /api/profile`. The finance line in the context snapshot carries a date, never a time.
 - **Listings are imported by the user's browser, never fetched by the server.** The «Guardar en Bróker IA» bookmarklet reads the page the user has open and hands it to the app in the URL fragment, with a per-browser key; without the key the text is left in the input box, not sent. Don't add server-side scraping. See `notes/listing-import.md`.
 - **Market offers go through `rankOffers()`** (`shared/finance.ts`): checked against the user (`requirements` in `data/rates.json`), priced without the bonus when the payroll is not met, ordered by total cost, with a Euribor +1/+2 scenario. Never sort or recommend by first payment. `data/rates.json` is edited by hand (see "Updating the bank rates" in the README); a test validates it.
 - **Ambiguous input is asked about, not guessed.** Gross or yearly pay, or an answer about a different topic, must not be saved as a fact.
