@@ -1,19 +1,16 @@
 // Respuestas del bróker escritas por código (no por un modelo): veredicto de un anuncio, cambios de
 // perfil, presupuesto, comparativa y ofertas. En modo local o sin IA son la respuesta; son instantáneas
 // y sus cifras salen del motor de cálculo.
-import { isLinkOnly, monthlyOwnership, redFlags, type HomeListing, type RedFlag, type SavedHome } from "../shared/broker.ts";
-import { affordability, analyzePurchase, rankOffers, type Profile, type RankedOffer } from "../shared/finance.ts";
+import { analyzeHome, isLinkOnly, monthlyOwnership, redFlags, type HomeListing, type RedFlag, type SavedHome } from "../shared/broker.ts";
+import { affordability, eur, rankOffers, type Profile, type RankedOffer } from "../shared/finance.ts";
 import { compareOffers, offerDefaults, type ReceivedOffer } from "../shared/offers.ts";
 import { ccaaName } from "../shared/taxes.ts";
 import type { StoredProfile } from "./store.ts";
 import { RATES_STALE_DAYS, loadRates, ratesAgeDays } from "./tools.ts";
 
 const pct = (n: number) => `${n.toLocaleString("es-ES", { maximumFractionDigits: 2 })} %`;
-export const eur = (n: number) => `${Math.round(n).toLocaleString("es-ES", { useGrouping: "always" })} €`;
 
 const VERDICT = { ok: "✅ **Te encaja**", justo: "🟡 **Va justa**", no: "❌ **Fuera de tu presupuesto ahora mismo**" } as const;
-
-const profileFor = (p: Profile, l: HomeListing): Profile => ({ ...p, ccaa: l.ccaa ?? p.ccaa, newBuild: l.newDevelopment || p.newBuild });
 
 const FLAG_QUESTION: Record<string, string> = {
   "Ocupada o sin posesión": "¿Quién vive ahora en la vivienda y cuándo se entrega libre?",
@@ -39,7 +36,7 @@ export function listingQuestions(l: HomeListing, flags: RedFlag[]): string[] {
 }
 
 export function listingSummary(me: StoredProfile, l: HomeListing): string {
-  const a = analyzePurchase(profileFor(me.profile, l), l.price);
+  const a = analyzeHome(me.profile, l);
   const own = monthlyOwnership(l, a.payment);
   const flags = redFlags(l);
   const lines = [
@@ -111,7 +108,7 @@ export function factsSummary(before: StoredProfile, after: StoredProfile & { cha
     const now = affordability(after.profile).maxPrice;
     if (was != null && was !== now) lines.push(`Antes era ${eur(was)}: ${now > was ? "sube" : "baja"} ${eur(Math.abs(now - was))}.`);
     const moved = homes
-      .map((h) => ({ h, was: analyzePurchase(profileFor(before.profile, h.listing), h.listing.price).verdict, now: analyzePurchase(profileFor(after.profile, h.listing), h.listing.price).verdict }))
+      .map((h) => ({ h, was: analyzeHome(before.profile, h.listing).verdict, now: analyzeHome(after.profile, h.listing).verdict }))
       .filter((x) => x.was !== x.now);
     if (moved.length) {
       lines.push("", "**Cambia en tus viviendas guardadas**");
@@ -132,7 +129,7 @@ export function homesSummary(me: StoredProfile, homes: SavedHome[]): string {
   if (links.length === homes.length) return [`Tienes **${homes.length}** ${homes.length === 1 ? "vivienda guardada" : "viviendas guardadas"}, pero todavía sin analizar.`, ...linkLines].join("\n");
   const rows = homes
     .filter((h) => !isLinkOnly(h.listing))
-    .map((h) => ({ h, a: analyzePurchase(profileFor(me.profile, h.listing), h.listing.price), flags: redFlags(h.listing) }))
+    .map((h) => ({ h, a: analyzeHome(me.profile, h.listing), flags: redFlags(h.listing) }))
     .sort((x, y) => x.h.listing.price - y.h.listing.price);
   const lines = [`Tienes **${homes.length}** ${homes.length === 1 ? "vivienda guardada" : "viviendas guardadas"}, recalculadas con tu situación de hoy:`, ""];
   for (const { h, a, flags } of rows) {

@@ -1,29 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ratesJson from "../data/rates.json";
 import type { HomeStatus, ListingInput, ProfileExtra, SavedHome } from "../shared/broker.ts";
-import { DEFAULT_PROFILE, type Offer, type Profile } from "../shared/finance.ts";
+import { DEFAULT_PROFILE, eur, type Profile, type RatesFile } from "../shared/finance.ts";
 import type { ReceivedOffer } from "../shared/offers.ts";
 
-export interface Rates {
-  updated: string;
-  euribor: { monthlyAvg: number; month: string; daily: number; dailyDate: string; note: string };
-  sources: { name: string; url: string }[];
-  offers: Offer[];
-}
-
 /** Copia incluida al compilar; refreshRates() la sustituye por la del servidor (data/rates.json de hoy). */
-export const RATES = ratesJson as Rates;
+export const RATES = ratesJson as RatesFile;
 
 export async function refreshRates(): Promise<void> {
   try {
     const r = await fetch("/api/rates");
-    if (r.ok) Object.assign(RATES, (await r.json()) as Rates);
+    if (r.ok) Object.assign(RATES, (await r.json()) as RatesFile);
   } catch {
     // sin servidor se usan los tipos con los que se compiló la web
   }
 }
 
-export const eur = (n: number) => `${Math.round(n).toLocaleString("es-ES", { useGrouping: "always" })} €`;
+export { eur };
 export const pct = (n: number, d = 2) => `${n.toLocaleString("es-ES", { minimumFractionDigits: d, maximumFractionDigits: d })} %`;
 export const dateEs = (iso: string) => new Date(iso + "T12:00:00").toLocaleDateString("es-ES", { day: "numeric", month: "long", year: "numeric" });
 

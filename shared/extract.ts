@@ -295,10 +295,11 @@ function listingPrice(t: string): number | null {
 export function looksLikeListing(message: string): boolean {
   const t = norm(message);
   if (listingPrice(t) == null) return false;
-  return /\d\s*m(²|2|etros)|\bhab\b|habitaci|dormitori|idealista\.com|fotocasa\.es|pisos\.com|habitaclia|en venta|se vende/.test(t);
+  return /\d\s*m(²|2|etros)|\bhabs?\b|habitaci|dormitori|idealista\.com|fotocasa\.es|pisos\.com|habitaclia|en venta|se vende/.test(t);
 }
 
-const HOME_WORD = /piso|chalet|casa|atico|duplex|estudio|vivienda|apartamento|adosado|loft|finca/;
+/** Palabra que nombra un tipo de vivienda, al principio de palabra («fotocasa» no cuenta como «casa»). */
+const HOME_WORD = /\b(piso|chalet|casa|atico|duplex|estudio|vivienda|apartamento|adosado|loft|finca)/;
 
 /** Lee los campos de un anuncio pegado como texto (Idealista y similares). Devuelve null si no hay precio. */
 export function parseListingText(message: string): ListingInput | null {
@@ -312,11 +313,12 @@ export function parseListingText(message: string): ListingInput | null {
 
   const city = findCity(message);
   const district = city?.districts.find((d) => ` ${norm(message)} `.includes(norm(d)));
-  // el título es la primera línea (o frase, si todo va seguido) que nombra un tipo de vivienda
+  // el título es la primera línea (o frase, si todo va seguido) que nombra un tipo de vivienda. La palabra
+  // tiene que estar fuera de los enlaces: «…fotocasa.es/es/comprar/vivienda/…» no es un título.
   const title = message
     .split(/\n|\.\s|[·|]| (?=\d{2,3}\.\d{3}\s*€)/)
     .map((l) => l.replace(/^(mira|este|anuncio|:|\s)+/i, "").trim())
-    .find((l) => l.length > 8 && l.length < 110 && HOME_WORD.test(norm(l)) && !/^https?:/.test(l));
+    .find((l) => l.length > 8 && l.length < 110 && HOME_WORD.test(norm(l.replace(/https?:\/\/\S+/g, ""))) && !/^https?:/.test(l));
 
   const floorNum = first(t, String.raw`planta\s*(\d{1,2})|(\d{1,2})\s*[ºªa]?\s*planta`);
   const floorWord = first(t, String.raw`\b(bajo|atico|entreplanta|semisotano|sotano)\b`);
@@ -328,7 +330,8 @@ export function parseListingText(message: string): ListingInput | null {
     price,
     url,
     size: num(String.raw`(\d{2,4})\s*m(?:²|2\b|etros)`),
-    rooms: num(String.raw`(\d{1,2})\s*(?:hab\b|hab\.|habitaci\w+|dormitori\w+)`),
+    // «2 hab.» en Idealista, «2 habs.» en Fotocasa
+    rooms: num(String.raw`(\d{1,2})\s*(?:habs?\b|habitaci\w+|dormitori\w+)`),
     bathrooms: num(String.raw`(\d)\s*banos?\b`),
     floor: floorNum ? (floorNum[1] ?? floorNum[2]) : floorWord?.[1],
     hasLift: /sin ascensor/.test(t) ? false : /ascensor/.test(t) ? true : undefined,

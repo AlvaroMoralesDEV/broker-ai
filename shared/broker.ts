@@ -1,5 +1,6 @@
 // Lo que el agente sabe de ti y de las viviendas que guardas, y las reglas para revisar un anuncio.
 // Las reglas son código a propósito: se pueden leer, discutir y testear, y cada alerta dice por qué salta.
+import { analyzePurchase, type Profile, type PurchaseAnalysis } from "./finance.ts";
 import type { Listing } from "./listings.ts";
 import type { CCAA } from "./taxes.ts";
 
@@ -325,6 +326,12 @@ export function toHomeListing(i: ListingInput, id = homeIdFromUrl(i.url) ?? "nue
     yearBuilt: i.yearBuilt ?? null,
   };
 }
+
+/** Perfil con el que se analiza una vivienda: impuestos de su comunidad y obra nueva si lo es. */
+export const profileForHome = (p: Profile, l: HomeListing): Profile => ({ ...p, ccaa: l.ccaa ?? p.ccaa, newBuild: l.newDevelopment || p.newBuild });
+
+/** ¿Puede el usuario comprar esta vivienda? Análisis de compra con el perfil ajustado a la vivienda. */
+export const analyzeHome = (p: Profile, l: HomeListing): PurchaseAnalysis => analyzePurchase(profileForHome(p, l), l.price);
 
 /** Coste mensual de tener la vivienda: hipoteca + comunidad + IBI prorrateado. */
 export function monthlyOwnership(l: HomeListing, payment: number) {

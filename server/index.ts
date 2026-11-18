@@ -3,9 +3,8 @@ import express from "express";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { CONTRACT_TYPES, HOME_STATUSES, missingKeyFacts, toHomeListing } from "../shared/broker.ts";
+import { CONTRACT_TYPES, HOME_STATUSES, analyzeHome, missingKeyFacts, toHomeListing } from "../shared/broker.ts";
 import type { ChatEvent } from "../shared/chat.ts";
-import { analyzePurchase } from "../shared/finance.ts";
 import { OFFER_TYPES } from "../shared/offers.ts";
 import { CCAA_IDS } from "../shared/taxes.ts";
 import { describeError, runAgent, toDisplay } from "./agent.ts";
@@ -229,7 +228,7 @@ app.post("/api/homes", asyncRoute(async (req, res) => {
   if (!parsed.success) return void res.status(400).json({ error: "Vivienda no válida" });
   const listing = toHomeListing(parsed.data.listing as never);
   const { profile } = await store.getProfile();
-  const verdict = analyzePurchase({ ...profile, ccaa: listing.ccaa ?? profile.ccaa, newBuild: listing.newDevelopment || profile.newBuild }, listing.price).verdict;
+  const verdict = analyzeHome(profile, listing).verdict;
   res.json((await store.saveHome(listing, { verdict })).home);
 }));
 

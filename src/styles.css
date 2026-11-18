@@ -236,6 +236,8 @@ button.link { background: none; border: 0; color: var(--accent-text); padding: 0
 .compare th { text-align: right; font-size: 0.75rem; color: var(--muted); font-weight: 600; padding: 6px 10px; white-space: nowrap; }
 .compare td { text-align: right; padding: 8px 10px; border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .compare th:first-child, .compare td:first-child { text-align: left; white-space: normal; min-width: 180px; }
+/* las alertas pueden ser varias: que bajen de línea en vez de empujar el veredicto fuera de la tabla */
+.compare th.wrap, .compare td.wrap { text-align: left; white-space: normal; min-width: 140px; }
 .milestones { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 12px; }
 .milestone { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; }
 .milestone.reached { border-color: var(--good); background: var(--good-soft); }

@@ -266,6 +266,23 @@ test("anuncio importado con el marcador: se analiza y se guarda en el mismo turn
   assert.equal(saved?.listing.price, 245000);
 });
 
+test("anuncio importado de Fotocasa: el título es el del anuncio, no la línea con el enlace", async () => {
+  // la URL de Fotocasa lleva «/vivienda/»: la primera línea («Guarda este anuncio de fotocasa.es: …») parecía un título
+  const { importMessage } = await import("../shared/importer.ts");
+  const r = await say(
+    importMessage({
+      url: "https://www.fotocasa.es/es/comprar/vivienda/madrid-capital/185000003/d",
+      title: "Piso en venta en calle de Antonio López, Usera, Madrid — fotocasa",
+      text: "Piso en venta en calle de Antonio López, Usera, Madrid\n108.000 €\n58 m² · 2 habs. · 1 baño · Planta 1ª exterior con ascensor",
+    }),
+  );
+  assert.match(r.text, /Piso en venta en calle de Antonio López/);
+  const saved = (await store.listHomes()).find((h) => h.listing.url?.includes("185000003"));
+  assert.equal(saved?.listing.title, "Piso en venta en calle de Antonio López, Usera, Madrid");
+  // Fotocasa escribe «habs.», no «hab.»
+  assert.equal(saved?.listing.rooms, 2);
+});
+
 test("importar dos veces el mismo anuncio: dice que ya estaba y no lo duplica", async () => {
   const { importMessage } = await import("../shared/importer.ts");
   const page = {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { isLinkOnly, portalOf, redFlags, type SavedHome } from "../../shared/broker.ts";
-import { analyzePurchase, type Profile } from "../../shared/finance.ts";
+import { analyzeHome, isLinkOnly, portalOf, redFlags, type SavedHome } from "../../shared/broker.ts";
+import type { Profile } from "../../shared/finance.ts";
 import { bookmarkletCode } from "../../shared/importer.ts";
 import { IMPORT_TOKEN, USER, eur, type HomesStore } from "../lib.ts";
 import { Mascot } from "../Mascot.tsx";
@@ -102,7 +102,7 @@ export function MisViviendas({ profile, store, onSimulate, onAskBroker }: Props)
         .filter((h) => activePortal === "todos" || portalOf(h.listing.url).id === activePortal)
         .map((h) => {
           const l = h.listing;
-          const a = analyzePurchase({ ...profile, ccaa: l.ccaa ?? profile.ccaa, newBuild: l.newDevelopment || profile.newBuild }, l.price);
+          const a = analyzeHome(profile, l);
           return { h, a, flags: redFlags(l) };
         }),
     [homes, filter, activePortal, profile],
@@ -159,7 +159,7 @@ export function MisViviendas({ profile, store, onSimulate, onAskBroker }: Props)
                   <th>Esfuerzo</th>
                   <th>Ahorros necesarios</th>
                   <th>Te sobra / falta</th>
-                  <th>Alertas</th>
+                  <th className="wrap">Alertas</th>
                   <th></th>
                 </tr>
               </thead>
@@ -176,7 +176,7 @@ export function MisViviendas({ profile, store, onSimulate, onAskBroker }: Props)
                       <td>{a.effortPct.toFixed(0)} %</td>
                       <td>{eur(a.cashNeeded)}</td>
                       <td className={a.savingsGap > 0 ? "bad" : "good"}>{a.savingsGap > 0 ? `−${eur(a.savingsGap)}` : `+${eur(a.savingsLeft)}`}</td>
-                      <td>{flags.length ? flags.map((f) => f.label).join(", ") : "—"}</td>
+                      <td className="wrap">{flags.length ? flags.map((f) => f.label).join(", ") : "—"}</td>
                       <td>
                         <VerdictBadge verdict={a.verdict} />
                       </td>

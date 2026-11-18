@@ -167,7 +167,8 @@ function upfront(p: Profile, price: number, ltvPct: number) {
   return { loan, tax, otherCosts, cashNeeded: price - loan + tax.amount + otherCosts };
 }
 
-const eur = (n: number) => `${Math.round(n).toLocaleString("es-ES", { useGrouping: "always" })} €`;
+/** Euros redondeados con separador de miles: «150.000 €». */
+export const eur = (n: number) => `${Math.round(n).toLocaleString("es-ES", { useGrouping: "always" })} €`;
 
 /** ¿Me puedo permitir una vivienda de este precio? */
 export function analyzePurchase(profile: Profile, price: number, o: Overrides = {}): PurchaseAnalysis {
@@ -256,6 +257,14 @@ export function affordability(profile: Profile, o: Overrides = {}): Affordabilit
 }
 
 // ---------- Ofertas de bancos ----------
+
+/** Formato de data/rates.json (se edita a mano; un test lo valida). */
+export interface RatesFile {
+  updated: string;
+  euribor: { monthlyAvg: number; month: string; daily: number; dailyDate: string; note: string };
+  sources: { name: string; url: string }[];
+  offers: Offer[];
+}
 
 export interface Offer {
   id: string;

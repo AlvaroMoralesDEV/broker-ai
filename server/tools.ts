@@ -2,12 +2,12 @@
 // Regla: los números salen siempre de aquí (shared/finance.ts), nunca de la cabeza del modelo.
 import { readFileSync } from "node:fs";
 import { z } from "zod";
-import { affordability, analyzePurchase, maxTermYears, rankOffers, type Offer, type Profile } from "../shared/finance.ts";
+import { affordability, analyzePurchase, maxTermYears, rankOffers, type Profile, type RankedOffer, type RatesFile } from "../shared/finance.ts";
 import {
   CONTRACT_TYPES,
   HOME_STATUSES,
   KEY_FACTS,
-  homeIdFromUrl,
+  analyzeHome,
   householdMonthlyIncome,
   isLinkOnly,
   linkListing,
@@ -24,13 +24,6 @@ import { payDoubt, savingsChangeIn } from "../shared/extract.ts";
 import { CCAA_IDS, ccaaName } from "../shared/taxes.ts";
 import { getLink, savingsBlock, setMode } from "./finance-link.ts";
 import * as store from "./store.ts";
-
-export interface RatesFile {
-  updated: string;
-  euribor: { monthlyAvg: number; month: string; daily: number; dailyDate: string; note: string };
-  sources: { name: string; url: string }[];
-  offers: Offer[];
-}
 
 export const loadRates = (): RatesFile => JSON.parse(readFileSync(new URL("../data/rates.json", import.meta.url), "utf8"));
 
@@ -135,11 +128,8 @@ function summary(a: ReturnType<typeof analyzePurchase>) {
   };
 }
 
-/** Perfil con el que se analiza una vivienda: impuestos de su comunidad y obra nueva si lo es. */
-const profileFor = (p: Profile, l: HomeListing): Profile => ({ ...p, ccaa: l.ccaa ?? p.ccaa, newBuild: l.newDevelopment || p.newBuild });
-
 function evaluate(p: Profile, l: HomeListing) {
-  const a = analyzePurchase(profileFor(p, l), l.price);
+  const a = analyzeHome(p, l);
   const own = monthlyOwnership(l, a.payment);
   return {
     analysis: a,
@@ -191,6 +181,37 @@ function homeLine(p: Profile, h: SavedHome) {
 function budgetOf(p: Profile) {
   const a = affordability(p);
   return { precio_maximo: a.maxPrice, cuota_maxima: r0(a.maxPayment), hipoteca_maxima: r0(a.maxLoan), limitado_por: a.limiting };
+}
+
+/** Una oferta de mercado, ya cruzada con el usuario, tal y como la ve el modelo. */
+function marketOfferLine(r: RankedOffer) {
+  const { offer: o, quote: q } = r;
+  return {
+    encaje: r.fit,
+    motivos: r.reasons,
+    tipo_aplicado_pct: r.ratePct,
+    coste_total: r0(r.totalCost),
+    coste_real_mayor_que_el_calculado: r.costUnderstated || undefined,
+    si_euribor_sube_1_punto: r.stress ? { cuota: r0(r.stress.plus1.payment), coste_total: r0(r.stress.plus1.totalCost) } : null,
+    si_euribor_sube_2_puntos: r.stress ? { cuota: r0(r.stress.plus2.payment), coste_total: r0(r.stress.plus2.totalCost) } : null,
+    banco: o.bank,
+    producto: o.product,
+    tipo: o.type,
+    tin_bonificado_pct: o.tinBonif,
+    tin_sin_bonificar_pct: o.tinNoBonif,
+    anos_tipo_inicial: o.initialYears ?? null,
+    diferencial_sobre_euribor: o.diffBonif ?? null,
+    tae_pct: o.tae,
+    financiacion_maxima_pct: q.ltvAvailable,
+    plazo_aplicado_anos: q.years,
+    cuota_inicial: r0(q.initialPayment),
+    cuota_despues_con_euribor_actual: q.laterPayment != null ? r0(q.laterPayment) : null,
+    cuota_sin_bonificar: q.noBonifPayment != null ? r0(q.noBonifPayment) : null,
+    intereses_totales: r0(q.totalInterest),
+    bonificaciones: o.bonificaciones,
+    comision_apertura: o.openingFee,
+    notas: o.notes,
+  };
 }
 
 /** Datos clave que el usuario aún no ha dado nunca (los del motor siempre tienen un valor por defecto). */
@@ -316,12 +337,12 @@ export const TOOLS = {
       const homes = (await store.listHomes())
         .filter((h) => !isLinkOnly(h.listing))
         .map((h) => ({
-        id: h.id,
-        titulo: h.listing.title,
-        precio: h.listing.price,
-        veredicto_antes: analyzePurchase(profileFor(before.profile, h.listing), h.listing.price).verdict,
-        veredicto_ahora: analyzePurchase(profileFor(after.profile, h.listing), h.listing.price).verdict,
-      }));
+          id: h.id,
+          titulo: h.listing.title,
+          precio: h.listing.price,
+          veredicto_antes: analyzeHome(before.profile, h.listing).verdict,
+          veredicto_ahora: analyzeHome(after.profile, h.listing).verdict,
+        }));
       // Sin número de pagas el cálculo supone 12: se dice, para que lo pregunte en vez de darlo por bueno.
       const avisos: string[] = [];
       if (fields.netPay != null && after.extra.pagas == null) avisos.push("No ha dicho cuántas pagas tiene: se han supuesto 12. Pregúntaselo (12 o 14), porque cambia sus ingresos.");
@@ -494,7 +515,8 @@ export const TOOLS = {
     run: async (input: { type?: "fija" | "variable" | "mixta"; loan?: number; years?: number }, ctx: ToolContext) => {
       const rates = loadRates();
       const p = ctx.me.profile;
-      const loan = input.loan ?? Math.round((affordability(p).maxPrice * p.ltvPct) / 100);
+      const budget = affordability(p);
+      const loan = input.loan ?? Math.round((budget.maxPrice * p.ltvPct) / 100);
       const years = input.years ?? p.years;
       return {
         datos_actualizados: rates.updated,
@@ -502,40 +524,12 @@ export const TOOLS = {
         euribor: rates.euribor,
         hipoteca: loan,
         plazo_anos: years,
-        cuota_maxima_del_usuario: r0(affordability(p).maxPayment),
+        cuota_maxima_del_usuario: r0(budget.maxPayment),
         ofertas: rankOffers(
           rates.offers.filter((o) => !input.type || o.type === input.type),
           { loan, years, age: p.age, ltvPct: p.ltvPct, netIncome: ctx.me.known ? p.netIncome : null, civilServant: ctx.me.extra.contractType === "funcionario" },
           rates.euribor.monthlyAvg,
-        ).map((r) => {
-            const { offer: o, quote: q } = r;
-            return {
-              encaje: r.fit,
-              motivos: r.reasons,
-              tipo_aplicado_pct: r.ratePct,
-              coste_total: r0(r.totalCost),
-              coste_real_mayor_que_el_calculado: r.costUnderstated || undefined,
-              si_euribor_sube_1_punto: r.stress ? { cuota: r0(r.stress.plus1.payment), coste_total: r0(r.stress.plus1.totalCost) } : null,
-              si_euribor_sube_2_puntos: r.stress ? { cuota: r0(r.stress.plus2.payment), coste_total: r0(r.stress.plus2.totalCost) } : null,
-              banco: o.bank,
-              producto: o.product,
-              tipo: o.type,
-              tin_bonificado_pct: o.tinBonif,
-              tin_sin_bonificar_pct: o.tinNoBonif,
-              anos_tipo_inicial: o.initialYears ?? null,
-              diferencial_sobre_euribor: o.diffBonif ?? null,
-              tae_pct: o.tae,
-              financiacion_maxima_pct: q.ltvAvailable,
-              plazo_aplicado_anos: q.years,
-              cuota_inicial: r0(q.initialPayment),
-              cuota_despues_con_euribor_actual: q.laterPayment != null ? r0(q.laterPayment) : null,
-              cuota_sin_bonificar: q.noBonifPayment != null ? r0(q.noBonifPayment) : null,
-              intereses_totales: r0(q.totalInterest),
-              bonificaciones: o.bonificaciones,
-              comision_apertura: o.openingFee,
-              notas: o.notes,
-            };
-          }),
+        ).map(marketOfferLine),
         fuentes: rates.sources,
       };
     },
@@ -660,7 +654,6 @@ export const TOOLS = {
     run: async (input: { id: string }) => ({ borrada: await store.removeNote(input.id) }),
   },
 } as const;
-
 
 export type ToolName = keyof typeof TOOLS;
 

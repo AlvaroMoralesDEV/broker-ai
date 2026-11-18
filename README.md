@@ -6,7 +6,7 @@ You tell it your situation and it works out how much you can buy. You paste a li
 
 > The app's interface is in Spanish, since it is built for the Spanish market.
 
-![Chat with the broker: a link it cannot open, saved on request](docs/chat.png)
+![A listing saved from the portal with the «Guardar en Bróker IA» bookmark: analysed and saved in one turn, with savings coming from the Finanzas app](docs/chat.png)
 
 The broker has a face: a little house that follows your cursor, puffs chimney smoke while it thinks, talks while the answer streams in, hops when a turn goes well and dozes off if you leave it alone. All screenshots use made-up demo data.
 
@@ -18,7 +18,7 @@ The broker has a face: a little house that follows your cursor, puffs chimney sm
 - **Links it can't read are said to be so.** The agent cannot open web pages. If you send only the URL of a listing, it tells you it hasn't seen it, asks for the text (or a screenshot with Claude), and offers to keep the link meanwhile. It asks before saving.
 - **Saved homes.** Status, notes and price history, all recalculated with your situation today, each with a button that opens the original listing. Each card has a tag with the portal it came from (Idealista, Fotocasa…), and you can filter by portal. A red × deletes a home after asking you to confirm. The same listing is never saved twice, even if its link arrives with a different tracking query. A home saved from a bare link shows no figures until you paste its listing, and is then completed in place.
 
-![Saved homes: one analysed, one saved as a link only](docs/homes.png)
+![Saved homes: the bookmarklet, the portal filter, the comparison and one home saved as a link only](docs/homes.png)
 
 - **Memory across conversations.** With Claude, the agent keeps short notes on decisions and their reasons ("ruled out that area because of the commute") and starts every new chat with them.
 - **Market mortgages matched to you.** Ask which mortgage suits you: offers are ranked by what you would pay over the whole term, not by the first payment. Each is checked against your loan, income and financing, so offers you cannot get are set apart with the reason, and variable and mixed ones show the payment if the Euribor rises two points next to your maximum payment.

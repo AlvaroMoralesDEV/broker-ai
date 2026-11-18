@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { redFlags, sameListingUrl, toHomeListing } from "../shared/broker.ts";
+import { analyzeHome, redFlags, sameListingUrl, toHomeListing } from "../shared/broker.ts";
 import { TOOL_LABEL, type ChatEvent, type DisplayMsg, type HomeCardData, type ImageInput } from "../shared/chat.ts";
-import { analyzePurchase, type Profile } from "../shared/finance.ts";
+import type { Profile } from "../shared/finance.ts";
 import type { HomesStore, Provider } from "./lib.ts";
 import { ListingCard } from "./ListingCard.tsx";
 import { Mascot, type Mood } from "./Mascot.tsx";
@@ -229,12 +229,11 @@ export function Chat({ profile, known, provider, conversationId, onConversation,
         (h.listing.title === card.listing.title && h.listing.price === Math.round(card.listing.price)),
     );
     const l = toHomeListing(card.listing, saved?.id ?? `card-${key}`);
-    const p = { ...profile, ccaa: l.ccaa ?? profile.ccaa, newBuild: l.newDevelopment || profile.newBuild };
     return (
       <ListingCard
         key={key}
         listing={l}
-        analysis={analyzePurchase(p, l.price)}
+        analysis={analyzeHome(profile, l)}
         flags={redFlags(l)}
         status={saved?.status}
         onStatus={saved ? (status) => homes.patch(saved.id, { status }) : undefined}

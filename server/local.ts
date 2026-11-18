@@ -4,10 +4,11 @@
 import { randomUUID } from "node:crypto";
 import { isLinkOnly, linkIn, missingKeyFacts, toHomeListing, type ListingInput } from "../shared/broker.ts";
 import type { ChatEvent } from "../shared/chat.ts";
+import { eur } from "../shared/finance.ts";
 import { asksToChangeAmount, extractAnswer, extractFacts, looksLikeListing, norm, numbersIn, parseListingText, parseNumberEs } from "../shared/extract.ts";
 import { ollama, type ProviderInfo } from "./provider.ts";
 import * as store from "./store.ts";
-import { GLOSSARY, bankOffersSummary, budgetLine, eur, factsSummary, homesSummary, listingSummary, offersSummary } from "./summaries.ts";
+import { GLOSSARY, bankOffersSummary, budgetLine, factsSummary, homesSummary, listingSummary, offersSummary } from "./summaries.ts";
 import { savingsBlock } from "./finance-link.ts";
 import { makeContext, runTool, type ToolContext } from "./tools.ts";
 
